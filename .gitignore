@@ -1,0 +1,12 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+
+logs/
+cache/
+data/
+mineru_outputs/
+evals/eval_results.csv
+evals/eval_summary.json
+evals/eval_outputs/

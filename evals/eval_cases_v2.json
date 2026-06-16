@@ -1,0 +1,122 @@
+[
+  {
+    "case_id": "tool_calc_001",
+    "case_type": "tool",
+    "question": "帮我计算 1.96 * 2.5 / sqrt(100)",
+    "requires_docs": false,
+    "expected_task_type": "calculation",
+    "expected_route": "tool",
+    "expected_need_rag": false,
+    "expected_answer_keywords": ["0.49", "Python", "计算器工具"],
+    "expected_source_keywords": [],
+    "must_have_fields": []
+  },
+  {
+    "case_id": "tool_calc_002",
+    "case_type": "tool",
+    "question": "计算 3 * (5 + 2)",
+    "requires_docs": false,
+    "expected_task_type": "calculation",
+    "expected_route": "tool",
+    "expected_need_rag": false,
+    "expected_answer_keywords": ["21", "计算器工具"],
+    "expected_source_keywords": [],
+    "must_have_fields": []
+  },
+  {
+    "case_id": "direct_chat_001",
+    "case_type": "direct",
+    "question": "你好，你能做什么？",
+    "requires_docs": false,
+    "expected_task_type": "chit_chat",
+    "expected_route": "direct",
+    "expected_need_rag": false,
+    "expected_answer_keywords": ["文档", "问答"],
+    "expected_source_keywords": [],
+    "must_have_fields": []
+  },
+  {
+    "case_id": "log_query_001",
+    "case_type": "tool",
+    "question": "查询最近一次运行日志",
+    "requires_docs": false,
+    "expected_task_type": "log_query",
+    "expected_route": "tool",
+    "expected_need_rag": false,
+    "expected_answer_keywords": ["日志", "logs", "不是大模型猜测"],
+    "expected_source_keywords": [],
+    "must_have_fields": []
+  },
+  {
+    "case_id": "rag_summary_001",
+    "case_type": "rag",
+    "question": "总结一下这个文档的主要内容",
+    "requires_docs": true,
+    "expected_task_type": "summary",
+    "expected_route": "rag",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["主要", "内容"],
+    "expected_source_keywords": [],
+    "must_have_fields": ["文档主题", "核心内容"]
+  },
+  {
+    "case_id": "rag_extract_001",
+    "case_type": "rag",
+    "question": "提取这个文档里的核心知识点",
+    "requires_docs": true,
+    "expected_task_type": "extract_points",
+    "expected_route": "rag",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["知识点"],
+    "expected_source_keywords": [],
+    "must_have_fields": ["知识点"]
+  },
+  {
+    "case_id": "rag_qa_001",
+    "case_type": "rag",
+    "question": "这个文档主要讲了什么？",
+    "requires_docs": true,
+    "expected_task_type": "qa",
+    "expected_route": "rag",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["文档"],
+    "expected_source_keywords": [],
+    "must_have_fields": ["答案"]
+  },
+  {
+    "case_id": "rag_question_solving_001",
+    "case_type": "rag",
+    "question": "第一题怎么做？",
+    "requires_docs": true,
+    "expected_task_type": "question_solving",
+    "expected_route": "rag",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["答案", "解析"],
+    "expected_source_keywords": ["1", "第一题"],
+    "must_have_fields": ["答案", "解题思路", "详细解析"]
+  },
+  {
+    "case_id": "rag_question_solving_002",
+    "case_type": "rag",
+    "question": "第 2 题的解题思路是什么？",
+    "requires_docs": true,
+    "expected_task_type": "question_solving",
+    "expected_route": "rag",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["解题思路", "解析"],
+    "expected_source_keywords": ["2", "第 2 题", "第二题"],
+    "must_have_fields": ["答案", "解题思路", "详细解析"]
+  },
+  {
+    "case_id": "rag_format_001",
+    "case_type": "rag",
+    "question": "把文档中的题目按题号、题干、答案、解析的格式整理",
+    "requires_docs": true,
+    "expected_task_type": "format_answer",
+    "expected_route": "rag",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["题号", "题干", "答案", "解析"],
+    "expected_source_keywords": [],
+    "must_have_fields": ["题号", "题干", "答案", "解析"]
+  }
+]

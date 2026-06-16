@@ -1,0 +1,92 @@
+[
+  {
+    "id": "case_001",
+    "question": "选择题第一题，抽样方法哪种最合适？",
+    "expected_task_type": "question_solving",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["D", "分层抽样", "学院", "代表性"],
+    "expected_source_keywords": ["分层抽样", "每个学院", "代表"],
+    "must_have_fields": ["答案", "解题思路", "详细解析", "依据来源"]
+  },
+  {
+    "id": "case_002",
+    "question": "为什么不是简单随机抽样？",
+    "expected_task_type": "question_solving",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["简单随机抽样", "不能保证", "学院", "代表性"],
+    "expected_source_keywords": ["简单随机抽样", "不能保证", "各学院"],
+    "must_have_fields": ["答案", "解题思路", "详细解析", "依据来源"]
+  },
+  {
+    "id": "case_003",
+    "question": "5次投球至少中四次的Excel表达式是什么？",
+    "expected_task_type": "question_solving",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["BINOM.DIST", "1-BINOM.DIST", "至少"],
+    "expected_source_keywords": ["BINOM.DIST", "至少中四次"],
+    "must_have_fields": ["答案", "解题思路", "详细解析", "依据来源"]
+  },
+  {
+    "id": "case_004",
+    "question": "下列变异指标中，哪个最受离群值影响？",
+    "expected_task_type": "question_solving",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["极差", "离群值", "最大值", "最小值"],
+    "expected_source_keywords": ["极差", "离群值"],
+    "must_have_fields": ["答案", "解题思路", "详细解析", "依据来源"]
+  },
+  {
+    "id": "case_005",
+    "question": "请总结这个文档的主要内容。",
+    "expected_task_type": "summary",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["文档主题", "核心内容", "关键结论"],
+    "expected_source_keywords": [],
+    "must_have_fields": ["文档主题", "核心内容", "关键结论", "依据来源"]
+  },
+  {
+    "id": "case_006",
+    "question": "帮我提取这个文件里的核心知识点。",
+    "expected_task_type": "extract_points",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["知识点", "重点", "复习"],
+    "expected_source_keywords": [],
+    "must_have_fields": ["知识点整理", "重点解释", "依据来源"]
+  },
+  {
+    "id": "case_007",
+    "question": "请按“答案-理由-依据来源”的格式回答：抽样方法哪种最合适？",
+    "expected_task_type": "format_answer",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["答案", "理由", "依据来源", "分层抽样"],
+    "expected_source_keywords": ["分层抽样"],
+    "must_have_fields": ["依据来源"]
+  },
+  {
+    "id": "case_008",
+    "question": "这个文档里有没有涉及置信区间或预测区间？",
+    "expected_task_type": "qa",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["置信区间", "预测区间"],
+    "expected_source_keywords": ["置信区间", "预测区间"],
+    "must_have_fields": ["答案", "理由", "依据来源"]
+  },
+  {
+    "id": "case_009",
+    "question": "这个文件适合用来复习哪些统计学知识？",
+    "expected_task_type": "extract_points",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["统计", "知识点", "复习"],
+    "expected_source_keywords": [],
+    "must_have_fields": ["知识点整理", "重点解释", "依据来源"]
+  },
+  {
+    "id": "case_010",
+    "question": "你能做什么？",
+    "expected_task_type": "chit_chat",
+    "expected_need_rag": false,
+    "expected_answer_keywords": ["PDF", "Word", "TXT", "图片", "OCR", "向量库"],
+    "expected_source_keywords": [],
+    "must_have_fields": []
+  }
+]
