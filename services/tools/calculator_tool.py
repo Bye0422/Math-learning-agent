@@ -25,7 +25,6 @@ ALLOWED_AST_NODES = (
     ast.Expression,
     ast.BinOp,
     ast.UnaryOp,
-    ast.Num,
     ast.Constant,
     ast.Add,
     ast.Sub,

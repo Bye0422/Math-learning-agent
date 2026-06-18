@@ -1,12 +1,17 @@
 .venv/
 .env
+.env.*
+!.env.example
+.codex/
 __pycache__/
 *.pyc
 
 logs/
+debug.log
 cache/
 data/
 mineru_outputs/
+mineru_runtime/
 evals/eval_results.csv
 evals/eval_summary.json
 evals/eval_outputs/

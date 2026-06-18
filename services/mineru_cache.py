@@ -5,6 +5,7 @@ from pathlib import Path
 
 from config import (
     MINERU_CACHE_DIR_NAME,
+    MINERU_CACHE_SCHEMA_VERSION,
     MINERU_METHOD,
     MINERU_LANG,
     MINERU_PAGE_BATCH_SIZE,
@@ -42,6 +43,7 @@ def build_cache_key(file_hash):
     """
     return (
         f"{file_hash}"
+        f"__schema_{MINERU_CACHE_SCHEMA_VERSION}"
         f"__method_{MINERU_METHOD}"
         f"__lang_{MINERU_LANG}"
         f"__batch_{MINERU_PAGE_BATCH_SIZE}"
@@ -146,6 +148,7 @@ def save_mineru_cache(
         "file_hash": file_hash,
         "page_count": page_count,
         "parse_mode": parse_mode,
+        "mineru_cache_schema_version": MINERU_CACHE_SCHEMA_VERSION,
         "mineru_method": MINERU_METHOD,
         "mineru_lang": MINERU_LANG,
         "mineru_page_batch_size": MINERU_PAGE_BATCH_SIZE,

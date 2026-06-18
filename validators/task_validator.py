@@ -28,7 +28,7 @@ def validate_task_info(task_info):
     task_type = task_info.get("task_type", "qa")
 
     if task_type not in ALLOWED_TASK_TYPES:
-        task_type = "qa"
+        return DEFAULT_TASK_INFO.copy()
 
     need_rag = task_info.get("need_rag", True)
 

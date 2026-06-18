@@ -27,6 +27,7 @@ from services.document_loader import read_multiple_files_to_documents  # noqa: E
 from services.vector_service import split_documents, create_vector_db  # noqa: E402
 from services.agent_graph import run_agent_graph  # noqa: E402
 from services.log_service import ensure_log_file, write_agent_log, build_retrieved_sources  # noqa: E402
+from evals.build_eval_report import write_eval_report  # noqa: E402
 
 try:
     from services.memory_service import init_memory_db, save_qa_turn
@@ -46,6 +47,7 @@ OUTPUT_DIR = EVAL_DIR / "eval_outputs"
 
 RESULTS_CSV_PATH = OUTPUT_DIR / "eval_results_v2.csv"
 SUMMARY_JSON_PATH = OUTPUT_DIR / "eval_summary_v2.json"
+TREND_JSON_PATH = OUTPUT_DIR / "eval_trend_v2.json"
 
 
 SUPPORTED_FILE_SUFFIXES = {
@@ -526,6 +528,121 @@ def build_summary(results, doc_context, started_at, finished_at):
     return summary
 
 
+def _metric_value(metrics, *names):
+    for name in names:
+        value = metrics.get(name, "")
+
+        if value == "":
+            continue
+
+        try:
+            return round(float(value), 4)
+        except Exception:
+            continue
+
+    return ""
+
+
+def _int_metric(metrics, name):
+    value = metrics.get(name, 0)
+
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
+def build_trend_entry(summary):
+    metrics = summary.get("metrics", {})
+
+    return {
+        "started_at": summary.get("started_at", ""),
+        "finished_at": summary.get("finished_at", ""),
+        "total_cases": summary.get("total_cases", 0),
+        "ok_cases": summary.get("ok_cases", 0),
+        "skipped_cases": summary.get("skipped_cases", 0),
+        "hit_rate": _metric_value(
+            metrics,
+            "source_keyword_score_avg",
+            "answer_keyword_score_avg",
+        ),
+        "format_valid_rate": _metric_value(metrics, "format_valid_rate"),
+        "elapsed_seconds_avg": _metric_value(metrics, "elapsed_seconds_avg"),
+        "rerank_usage_rate": _metric_value(metrics, "rerank_usage_rate"),
+        "error_count": _int_metric(metrics, "error_count"),
+    }
+
+
+def build_trend_report(history):
+    if not history:
+        return {
+            "latest": {},
+            "previous": {},
+            "delta": {},
+            "history": [],
+        }
+
+    latest = history[-1]
+    previous = history[-2] if len(history) >= 2 else {}
+
+    delta = {}
+
+    for field in [
+        "hit_rate",
+        "format_valid_rate",
+        "elapsed_seconds_avg",
+        "rerank_usage_rate",
+        "error_count",
+    ]:
+        latest_value = latest.get(field, "")
+        previous_value = previous.get(field, "")
+
+        if latest_value == "" or previous_value == "":
+            delta[field] = ""
+            continue
+
+        try:
+            delta[field] = round(float(latest_value) - float(previous_value), 4)
+        except Exception:
+            delta[field] = ""
+
+    return {
+        "latest": latest,
+        "previous": previous,
+        "delta": delta,
+        "history": history,
+    }
+
+
+def update_trend_report(summary):
+    history = []
+
+    if TREND_JSON_PATH.exists():
+        try:
+            data = json.loads(TREND_JSON_PATH.read_text(encoding="utf-8"))
+
+            if isinstance(data, dict) and isinstance(data.get("history"), list):
+                history = data["history"]
+            elif isinstance(data, list):
+                history = data
+        except Exception:
+            history = []
+
+    history.append(build_trend_entry(summary))
+    report = build_trend_report(history)
+
+    TREND_JSON_PATH.write_text(
+        json.dumps(
+            report,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    return report
+
+
 def write_results_csv(results):
     if not results:
         return
@@ -710,12 +827,19 @@ def run_eval():
 
     write_results_csv(results)
     write_summary_json(summary)
+    trend_report = update_trend_report(summary)
+    report_path = write_eval_report()
 
     print("\n========== Eval V2 完成 ==========")
     print(f"结果 CSV：{RESULTS_CSV_PATH}")
     print(f"汇总 JSON：{SUMMARY_JSON_PATH}")
+    print(f"报告 HTML：{report_path}")
     print("\n核心指标：")
     for key, value in summary["metrics"].items():
+        print(f"- {key}: {value}")
+
+    print("\nTrend delta:")
+    for key, value in trend_report["delta"].items():
         print(f"- {key}: {value}")
 
 

@@ -118,5 +118,41 @@
     "expected_answer_keywords": ["题号", "题干", "答案", "解析"],
     "expected_source_keywords": [],
     "must_have_fields": ["题号", "题干", "答案", "解析"]
+  },
+  {
+    "case_id": "rag_question_option_001",
+    "case_type": "rag",
+    "question": "选择题第 3 题为什么选 B？",
+    "requires_docs": true,
+    "expected_task_type": "question_solving",
+    "expected_route": "rag",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["B", "解析", "原因"],
+    "expected_source_keywords": ["3", "B"],
+    "must_have_fields": ["答案", "解题思路", "详细解析"]
+  },
+  {
+    "case_id": "rag_question_subpart_001",
+    "case_type": "rag",
+    "question": "第 4 题第 2 小问怎么做？",
+    "requires_docs": true,
+    "expected_task_type": "question_solving",
+    "expected_route": "rag",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["第 2 小问", "解析"],
+    "expected_source_keywords": ["4", "2"],
+    "must_have_fields": ["答案", "解题思路", "详细解析"]
+  },
+  {
+    "case_id": "rag_question_completeness_001",
+    "case_type": "rag",
+    "question": "这份资料里有哪些题目缺少答案或解析？",
+    "requires_docs": true,
+    "expected_task_type": "extract_points",
+    "expected_route": "rag",
+    "expected_need_rag": true,
+    "expected_answer_keywords": ["题目", "答案", "解析"],
+    "expected_source_keywords": [],
+    "must_have_fields": ["知识点"]
   }
 ]

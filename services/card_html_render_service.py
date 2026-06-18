@@ -18,7 +18,7 @@ from config import (
 try:
     from config import CARD_FOOTER
 except Exception:
-    CARD_FOOTER = "MathCard Agent"
+    CARD_FOOTER = "Math-learning-agent 数学学习助手"
 
 
 def now_text():
