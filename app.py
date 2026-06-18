@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime
 
 import streamlit as st
@@ -59,13 +58,38 @@ from services.wrongbook_service import (
     init_wrongbook_db,
     save_wrong_question_cards,
     get_wrong_questions,
+    get_wrong_questions_filtered,
+    get_wrongbook_review_summary,
     count_wrong_questions,
     export_wrong_questions_to_pdf,
+    export_wrong_questions_to_pdf_by_ids,
+    update_wrong_question_review,
 )
 
 from services.card_edit_service import (
     build_item_from_user_edit,
     edit_card_with_llm,
+)
+from state.session_state import (
+    init_session_state,
+    reset_chat_state,
+    reset_document_state,
+    start_new_file_session,
+)
+from ui.chunk_debug_panel import render_chunk_debug_panel
+from ui.result_views import (
+    render_math_exam_items,
+    render_pdf_quality_result,
+    render_wrong_cards,
+)
+from ui.theme import (
+    close_chat_stage,
+    render_app_header,
+    render_global_styles,
+    render_section_note,
+    render_sidebar_brand,
+    render_status_grid,
+    open_chat_stage,
 )
 
 # =========================
@@ -73,13 +97,7 @@ from services.card_edit_service import (
 # =========================
 
 st.set_page_config(page_title=APP_PAGE_TITLE, layout="wide")
-st.title(APP_TITLE)
-
-if ENABLE_MATH_EXAM_MODE:
-    st.caption(
-        "面向小学到大学的数学题目，支持上传 PDF、Word、TXT、图片或直接输入题干，"
-        "自动生成题干、解析、难度星级、题目类型和知识点标签，并可加入错题库、导出 PDF 错题集。"
-    )
+render_global_styles()
 
 
 # =========================
@@ -126,140 +144,6 @@ def render_export_buttons():
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
 
-
-# =========================
-# UI 函数：PDF 质量检测展示
-# =========================
-
-def render_pdf_quality_result(documents):
-    """
-    在页面展示 PDF 解析质量检测结果。
-    """
-    quality_docs = []
-
-    for doc in documents:
-        metadata = doc.metadata or {}
-
-        if metadata.get("pdf_quality_score", "") != "":
-            quality_docs.append(doc)
-
-    if not quality_docs:
-        return
-
-    st.subheader("PDF 解析质量检测")
-
-    for index, doc in enumerate(quality_docs, start=1):
-        metadata = doc.metadata or {}
-
-        source = metadata.get("source", "")
-        file_type = metadata.get("file_type", "")
-        score = metadata.get("pdf_quality_score", "")
-        level = metadata.get("pdf_quality_level", "")
-        issues = metadata.get("pdf_quality_issues", "")
-        suggestions = metadata.get("pdf_quality_suggestions", "")
-
-        title = f"{source} | {level} | {score} 分"
-
-        if level == "good":
-            st.success(f"解析质量：{title}")
-        elif level == "medium":
-            st.warning(f"解析质量：{title}")
-        else:
-            st.error(f"解析质量：{title}")
-
-        with st.expander(f"查看质量检测详情 {index}"):
-            st.write(f"来源文件：{source}")
-            st.write(f"文件类型：{file_type}")
-            st.write(f"质量等级：{level}")
-            st.write(f"质量分数：{score}")
-
-            st.write("主要问题：")
-            st.write(issues)
-
-            st.write("优化建议：")
-            st.write(suggestions)
-
-            st.write("检测指标：")
-            st.write(
-                {
-                    "文本长度": metadata.get("pdf_quality_text_length", ""),
-                    "乱码比例": metadata.get("pdf_quality_garbled_ratio", ""),
-                    "空行比例": metadata.get("pdf_quality_blank_line_ratio", ""),
-                    "正文密度": metadata.get("pdf_quality_content_density", ""),
-                    "题号数量": metadata.get("pdf_quality_question_count", ""),
-                    "选项数量": metadata.get("pdf_quality_option_count", ""),
-                    "数学符号数量": metadata.get("pdf_quality_math_token_count", ""),
-                    "公式行数量": metadata.get("pdf_quality_formula_line_count", ""),
-                    "重复短行数量": metadata.get("pdf_quality_repeated_short_line_count", ""),
-                }
-            )
-
-
-# =========================
-# UI 函数：数学结构化解析展示
-# =========================
-
-def render_math_exam_items(items):
-    """
-    展示数学题目解析结构化结果。
-    每道题必须包含 analysis、difficulty、type、tags。
-    """
-    if not items:
-        return
-
-    st.subheader("数学题目解析结果")
-
-    for index, item in enumerate(items, start=1):
-        analysis = item.get("analysis", "")
-        difficulty = item.get("difficulty", "")
-        question_type = item.get("type", "")
-        tags = item.get("tags", [])
-
-        with st.expander(
-            f"第 {index} 题 | {question_type} | 难度 {difficulty}",
-            expanded=True,
-        ):
-            st.markdown("**analysis：解析**")
-            st.write(analysis)
-
-            st.markdown("**difficulty：难度**")
-            st.write(difficulty)
-
-            st.markdown("**type：题目类型**")
-            st.write(question_type)
-
-            st.markdown("**tags：标签**")
-            st.json(tags)
-
-
-# 兼容旧函数名，避免其他地方还在调用 render_stat_exam_items
-def render_stat_exam_items(items):
-    return render_math_exam_items(items)
-
-
-# =========================
-# UI 函数：错题卡图片展示
-# =========================
-
-def render_wrong_cards(card_results):
-    """
-    展示本轮生成的错题卡图片。
-    """
-    if not card_results:
-        return
-
-    st.subheader("错题卡片")
-
-    for card in card_results:
-        index = card.get("index", "")
-        image_path = card.get("image_path", "")
-
-        if image_path:
-            st.image(
-                image_path,
-                caption=f"错题卡 {index}",
-                use_container_width=True,
-            )
 
 # =========================
 # UI 函数：错题卡编辑区
@@ -455,50 +339,8 @@ def render_card_edit_area():
 # 初始化 session_state
 # =========================
 
-if "chat_history" not in st.session_state:
-    st.session_state["chat_history"] = []
-
-if "vector_db" not in st.session_state:
-    st.session_state["vector_db"] = None
-
-if "current_file_key" not in st.session_state:
-    st.session_state["current_file_key"] = None
-
-if "current_file_names" not in st.session_state:
-    st.session_state["current_file_names"] = []
-
-if "documents" not in st.session_state:
-    st.session_state["documents"] = []
-
-if "chunks" not in st.session_state:
-    st.session_state["chunks"] = []
-
-if "session_id" not in st.session_state:
-    st.session_state["session_id"] = uuid.uuid4().hex[:12]
-
-if "memory_loaded" not in st.session_state:
-    st.session_state["memory_loaded"] = False
-
-if "last_log_row" not in st.session_state:
-    st.session_state["last_log_row"] = None
-
-if "last_card_results" not in st.session_state:
-    st.session_state["last_card_results"] = []
-
-if "last_card_source_info" not in st.session_state:
-    st.session_state["last_card_source_info"] = {}
-
-if "last_card_saved" not in st.session_state:
-    st.session_state["last_card_saved"] = False
-
-if "editable_question_text" not in st.session_state:
-    st.session_state["editable_question_text"] = ""
-
-if "editable_math_items" not in st.session_state:
-    st.session_state["editable_math_items"] = []
-
-if "edit_instruction" not in st.session_state:
-    st.session_state["edit_instruction"] = ""
+init_session_state()
+render_app_header(APP_TITLE)
 
 
 # =========================
@@ -541,10 +383,12 @@ if ENABLE_SQLITE_MEMORY and not st.session_state["memory_loaded"]:
 # =========================
 
 with st.sidebar:
+    render_sidebar_brand(
+        PRODUCT_NAME,
+        PRODUCT_CHINESE_NAME,
+        st.session_state["session_id"],
+    )
     st.subheader("运行信息")
-    st.write(f"产品：`{PRODUCT_NAME}`")
-    st.write(f"中文名：`{PRODUCT_CHINESE_NAME}`")
-    st.write(f"Session ID：`{st.session_state['session_id']}`")
     st.write(f"日志文件：`{LOG_FILE}`")
 
     if st.session_state["last_log_row"]:
@@ -593,6 +437,23 @@ with st.sidebar:
         st.write(f"全部错题数：{total_wrong_count}")
         st.write(f"当前会话错题数：{current_session_wrong_count}")
 
+        review_summary = get_wrongbook_review_summary(
+            due_before=datetime.now().strftime("%Y-%m-%d")
+        )
+        status_labels = {
+            "new": "新错题",
+            "reviewing": "复习中",
+            "mastered": "已掌握",
+        }
+        status_counts = review_summary.get("by_status", {})
+
+        st.write(f"待复习错题：{review_summary.get('due_count', 0)}")
+        st.write(f"累计复习次数：{review_summary.get('total_review_count', 0)}")
+
+        with st.expander("复习状态概览"):
+            for status_key, label in status_labels.items():
+                st.write(f"{label}：{status_counts.get(status_key, 0)}")
+
         if st.button("导出全部错题 PDF"):
             try:
                 pdf_path = export_wrong_questions_to_pdf(session_id=None)
@@ -622,6 +483,165 @@ with st.sidebar:
                     st.write(f"难度：{wrong.get('difficulty', '')}")
                     st.write(f"标签：{' / '.join(wrong.get('tags', []))}")
                     st.write(f"时间：{wrong.get('created_at', '')}")
+
+        with st.expander("筛选与批量导出"):
+            filter_keyword = st.text_input(
+                "搜索题干、解析或标签",
+                key="wrongbook_filter_keyword",
+            )
+            filter_type = st.selectbox(
+                "题型",
+                options=["全部", "选择题", "判断题", "简答题", "填空题", "计算题"],
+                key="wrongbook_filter_type",
+            )
+            filter_difficulty = st.selectbox(
+                "难度",
+                options=["全部", 1, 2, 3, 4, 5],
+                key="wrongbook_filter_difficulty",
+            )
+            filter_tag = st.text_input(
+                "标签精确匹配",
+                key="wrongbook_filter_tag",
+            )
+            filter_review_status = st.selectbox(
+                "复习状态",
+                options=["全部", "new", "reviewing", "mastered"],
+                format_func=lambda value: {
+                    "全部": "全部",
+                    "new": "新错题",
+                    "reviewing": "复习中",
+                    "mastered": "已掌握",
+                }.get(value, value),
+                key="wrongbook_filter_review_status",
+            )
+            filter_due_only = st.checkbox(
+                "只看今天前到期",
+                key="wrongbook_filter_due_only",
+            )
+
+            filtered_wrong_questions = get_wrong_questions_filtered(
+                question_type="" if filter_type == "全部" else filter_type,
+                difficulty=None if filter_difficulty == "全部" else filter_difficulty,
+                tag=filter_tag,
+                keyword=filter_keyword,
+                review_status="" if filter_review_status == "全部" else filter_review_status,
+                due_before=datetime.now().strftime("%Y-%m-%d") if filter_due_only else None,
+                limit=200,
+            )
+
+            st.write(f"匹配错题数：{len(filtered_wrong_questions)}")
+
+            option_to_id = {}
+            options = []
+
+            for wrong in filtered_wrong_questions[:50]:
+                tags = " / ".join(wrong.get("tags", []))
+                question_text = wrong.get("question_text", "").replace("\n", " ")
+                label = (
+                    f"{wrong.get('type', '')} | 难度 {wrong.get('difficulty', '')} | "
+                    f"{status_labels.get(wrong.get('review_status', 'new'), wrong.get('review_status', 'new'))} | "
+                    f"{tags} | {question_text[:28]}"
+                )
+                option_to_id[label] = wrong.get("id", "")
+                options.append(label)
+
+            selected_labels = st.multiselect(
+                "选择要导出的错题",
+                options=options,
+                key="wrongbook_selected_export_labels",
+            )
+
+            selected_ids = [
+                option_to_id[label]
+                for label in selected_labels
+                if option_to_id.get(label)
+            ]
+
+            if st.button("导出选中错题 PDF", key="export_selected_wrongbook_pdf"):
+                if not selected_ids:
+                    st.warning("请先选择至少一道错题。")
+                else:
+                    try:
+                        pdf_path = export_wrong_questions_to_pdf_by_ids(selected_ids)
+
+                        with open(pdf_path, "rb") as f:
+                            st.download_button(
+                                label="下载选中错题 PDF",
+                                data=f.read(),
+                                file_name="wrongbook_selected.pdf",
+                                mime="application/pdf",
+                            )
+
+                        st.success(f"已生成选中错题 PDF，共 {len(selected_ids)} 道题。")
+
+                    except Exception as e:
+                        st.error(f"导出选中错题失败：{e}")
+
+            st.write("---")
+            st.write("复习记录")
+
+            review_options = options[:]
+            selected_review_label = st.selectbox(
+                "选择要更新的错题",
+                options=[""] + review_options,
+                format_func=lambda value: "请选择错题" if value == "" else value,
+                key="wrongbook_review_selected_label",
+            )
+
+            if selected_review_label:
+                selected_review_id = option_to_id.get(selected_review_label)
+                selected_wrong = next(
+                    (
+                        item
+                        for item in filtered_wrong_questions
+                        if item.get("id") == selected_review_id
+                    ),
+                    {},
+                )
+
+                review_status_value = st.selectbox(
+                    "更新复习状态",
+                    options=["new", "reviewing", "mastered"],
+                    index=["new", "reviewing", "mastered"].index(
+                        selected_wrong.get("review_status", "new")
+                        if selected_wrong.get("review_status", "new") in ["new", "reviewing", "mastered"]
+                        else "new"
+                    ),
+                    format_func=lambda value: status_labels.get(value, value),
+                    key="wrongbook_review_status_update",
+                )
+                mistake_reason_value = st.text_area(
+                    "错因记录",
+                    value=selected_wrong.get("mistake_reason", ""),
+                    key="wrongbook_mistake_reason_update",
+                )
+                next_review_date = st.date_input(
+                    "下次复习日期",
+                    key="wrongbook_next_review_date_update",
+                )
+                mark_reviewed = st.checkbox(
+                    "本次已完成复习",
+                    key="wrongbook_mark_reviewed",
+                )
+
+                if st.button("保存复习记录", key="save_wrongbook_review"):
+                    updated = update_wrong_question_review(
+                        selected_review_id,
+                        mistake_reason=mistake_reason_value,
+                        review_status=review_status_value,
+                        next_review_at=next_review_date.strftime("%Y-%m-%d"),
+                        last_reviewed_at=(
+                            datetime.now().strftime("%Y-%m-%d")
+                            if mark_reviewed
+                            else None
+                        ),
+                    )
+
+                    if updated:
+                        st.success("复习记录已保存。")
+                        st.rerun()
+                    else:
+                        st.warning("没有可保存的复习记录。")
 
     st.divider()
     st.subheader("导出问答")
@@ -653,47 +673,67 @@ if ENABLE_MATH_EXAM_MODE:
 # 文件上传
 # =========================
 
+render_status_grid(
+    [
+        {
+            "label": "当前文档",
+            "value": len(st.session_state.get("current_file_names", [])),
+            "note": "已载入文件数",
+        },
+        {
+            "label": "原始 Document",
+            "value": len(st.session_state.get("documents", [])),
+            "note": "解析后的文档单元",
+        },
+        {
+            "label": "Chunk",
+            "value": len(st.session_state.get("chunks", [])),
+            "note": "进入检索的文本块",
+        },
+        {
+            "label": "向量库",
+            "value": "就绪" if st.session_state.get("vector_db") is not None else "未就绪",
+            "note": "文档问答依赖此状态",
+        },
+    ]
+)
+
+st.subheader("资料辅助区")
+render_section_note("资料上传、解析和 Chunk 调试作为对话的上下文支持；主要学习操作集中在下方 AI 对话区。")
+
 uploaded_files = st.file_uploader(
-    "上传一个或多个文档文件",
+    "上传文档",
     type=SUPPORTED_FILE_TYPES,
     accept_multiple_files=True,
 )
 
-if not uploaded_files:
-    st.info("请先上传 PDF、Word、TXT 或图片文件。")
-    st.stop()
+has_uploaded_files = bool(uploaded_files)
 
+if has_uploaded_files:
+    current_file_names = [file.name for file in uploaded_files]
+    current_file_key = "|".join(
+        [f"{file.name}_{file.size}" for file in uploaded_files]
+    )
+else:
+    current_file_names = []
+    current_file_key = ""
 
-current_file_names = [file.name for file in uploaded_files]
-current_file_key = "|".join(
-    [f"{file.name}_{file.size}" for file in uploaded_files]
-)
+if not has_uploaded_files and st.session_state["current_file_key"]:
+    reset_document_state()
 
 # 换文件后，清空旧状态
-if st.session_state["current_file_key"] != current_file_key:
-    st.session_state["current_file_key"] = current_file_key
-    st.session_state["current_file_names"] = current_file_names
-    st.session_state["documents"] = []
-    st.session_state["chunks"] = []
-    st.session_state["vector_db"] = None
-    st.session_state["chat_history"] = []
-    st.session_state["last_log_row"] = None
-    st.session_state["last_card_results"] = []
-    st.session_state["last_card_source_info"] = {}
-    st.session_state["last_card_saved"] = False
-    st.session_state["editable_question_text"] = ""
-    st.session_state["editable_math_items"] = []
-
-    # 换文件时开启一个新的 session，避免不同文档的对话混在一起
-    st.session_state["session_id"] = uuid.uuid4().hex[:12]
-    st.session_state["memory_loaded"] = True
+if has_uploaded_files and st.session_state["current_file_key"] != current_file_key:
+    start_new_file_session(current_file_key, current_file_names)
 
 
 # =========================
 # 文档解析
 # =========================
 
-if not st.session_state["documents"]:
+if not has_uploaded_files:
+    st.info("可以先上传 PDF、Word、TXT 或图片文件后进行文档问答；也可以直接提问使用计算器、日志查询或闲聊能力。")
+
+if has_uploaded_files and not st.session_state["documents"]:
     with st.spinner("正在解析上传文件..."):
         documents, load_errors = read_multiple_files_to_documents(uploaded_files)
 
@@ -704,71 +744,81 @@ if not st.session_state["documents"]:
 
 documents = st.session_state["documents"]
 
-if not documents:
+if has_uploaded_files and not documents:
     st.warning("没有成功读取到文档内容，请检查文件格式或重新上传。")
-    st.stop()
 
-render_pdf_quality_result(documents)
+if documents:
+    render_pdf_quality_result(documents)
 
-full_text = "\n\n".join([doc.page_content for doc in documents])
+    full_text = "\n\n".join([doc.page_content for doc in documents])
 
-st.subheader("文档读取结果")
-st.write(full_text[:1000])
+    with st.expander("文档读取详情", expanded=False):
+        render_section_note("这里展示解析后的前 1000 个字符，用于快速确认资料是否读取正确。")
+        st.write(full_text[:1000])
 
-st.success(
-    f"读取完成，共读取 {len(uploaded_files)} 个文件，"
-    f"共生成 {len(documents)} 个原始 Document，"
-    f"共 {len(full_text)} 个字符。"
-)
+        st.success(
+            f"读取完成，共读取 {len(uploaded_files)} 个文件，"
+            f"共生成 {len(documents)} 个原始 Document，"
+            f"共 {len(full_text)} 个字符。"
+        )
 
-with st.expander("已上传文件"):
-    for file_name in current_file_names:
-        st.write(f"- {file_name}")
+        st.write("已上传文件")
+        for file_name in current_file_names:
+            st.write(f"- {file_name}")
 
 
 # =========================
 # Chunk 切分
 # =========================
 
-if not st.session_state["chunks"]:
+if documents and not st.session_state["chunks"]:
     chunks = split_documents(documents)
     st.session_state["chunks"] = chunks
 
 chunks = st.session_state["chunks"]
 
-st.subheader("文本切分结果")
-st.success(f"共切分出 {len(chunks)} 个 chunk。")
-
-with st.expander("查看前 5 个 chunk"):
-    for i, chunk in enumerate(chunks[:5], start=1):
-        source = chunk.metadata.get("source", "未知文件")
-        file_type = chunk.metadata.get("file_type", "未知类型")
-        location = chunk.metadata.get("location", "未知位置")
-        chunk_id = chunk.metadata.get("chunk_id", "未知片段")
-
-        st.markdown(f"### Chunk {i}")
-        st.write(f"来源：{source}")
-        st.write(f"类型：{file_type}")
-        st.write(f"位置：{location}")
-        st.write(f"Chunk 编号：{chunk_id}")
-        st.write(chunk.page_content)
+if chunks:
+    st.subheader("资料质量与 Chunk")
+    render_section_note("Chunk 是进入 RAG 检索的最小上下文单元。优先检查高风险 chunk，再进行问答。")
+    st.success(f"共切分出 {len(chunks)} 个 chunk。")
+    render_chunk_debug_panel(chunks)
 
 
 # =========================
 # 向量库
 # =========================
 
-if st.button("建立向量库"):
+if chunks and st.session_state["vector_db"] is None and not st.session_state["vector_build_error"]:
+    with st.spinner("正在自动向量化并建立向量库，请稍等..."):
+        try:
+            vector_db = create_vector_db(chunks)
+            st.session_state["vector_db"] = vector_db
+            st.session_state["vector_build_file_key"] = st.session_state.get("current_file_key", "")
+            st.success("向量库已自动建立，可以开始提问。")
+        except Exception as e:
+            st.session_state["vector_build_error"] = str(e)
+            st.error(f"向量库自动建立失败：{e}")
+
+if chunks and st.session_state["vector_db"] is not None:
+    st.success("向量库状态：已就绪。")
+
+if chunks and st.session_state["vector_build_error"]:
+    st.warning("向量库状态：自动建立失败，可以检查 API 配置或网络后手动重试。")
+
+if chunks and st.button("重新建立向量库"):
     with st.spinner("正在向量化并建立向量库，请稍等..."):
         try:
             vector_db = create_vector_db(chunks)
             st.session_state["vector_db"] = vector_db
+            st.session_state["vector_build_error"] = ""
+            st.session_state["vector_build_file_key"] = st.session_state.get("current_file_key", "")
             st.success("向量库建立完成！")
         except Exception as e:
+            st.session_state["vector_build_error"] = str(e)
             st.error(f"向量库建立失败：{e}")
 
-if st.session_state["vector_db"] is None:
-    st.warning("请先点击“建立向量库”，再开始提问。")
+if has_uploaded_files and chunks and st.session_state["vector_db"] is None:
+    st.warning("当前文档尚未完成向量库构建，文档问答暂不可用；工具类问题仍可提问。")
 
 
 # =========================
@@ -776,24 +826,20 @@ if st.session_state["vector_db"] is None:
 # =========================
 
 st.divider()
-st.subheader("多轮问答")
+open_chat_stage()
+st.subheader("AI 对话主工作区")
+render_section_note("这是页面的主要操作区。你可以直接提问、让系统讲题、生成错题卡，或查询运行日志。")
 
 col1, col2 = st.columns([1, 5])
 
 with col1:
         if st.button("清空对话"):
-            st.session_state["chat_history"] = []
-            st.session_state["last_log_row"] = None
-            st.session_state["last_card_results"] = []
-            st.session_state["last_card_source_info"] = {}
-            st.session_state["last_card_saved"] = False
-            st.session_state["editable_question_text"] = ""
-            st.session_state["editable_math_items"] = []
+            reset_chat_state()
             st.rerun()
 
 with col2:
     st.write(
-        "当前支持：数学题目解析、错题卡生成、错题库、PDF 错题集导出、LangGraph、RAG、Rerank、Memory、日志。"
+        "当前支持：无文档工具问答、文档自动建库、数学题目解析、错题卡生成、错题库、PDF 错题集导出、LangGraph、RAG、Rerank、Memory、日志。"
     )
 
 
@@ -909,6 +955,10 @@ if question:
 
                 if "_rerank_error" in metadata:
                     st.write(f"Rerank 错误：{metadata.get('_rerank_error')}")
+
+                if "_retrieval_explanation" in metadata:
+                    st.write("结构化检索解释：")
+                    st.json(metadata.get("_retrieval_explanation"))
 
                 st.write("内容：")
                 st.write(doc.page_content)
@@ -1028,6 +1078,8 @@ if question:
 
     except Exception as e:
         st.warning(f"日志写入失败：{e}")
+
+close_chat_stage()
 
 # =========================
 # 持久化错题卡保存按钮

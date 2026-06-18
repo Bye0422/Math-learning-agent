@@ -462,8 +462,11 @@ def read_pdf_with_mineru(uploaded_file):
                 return documents, errors
 
             if batch_result["errors"]:
-                for error in batch_result["errors"]:
-                    errors.append(error)
+                errors.append(
+                    "MinerU 分批解析存在失败，已准备回退到 pypdf，避免只索引部分页码。\n"
+                    + "\n".join(batch_result["errors"])
+                )
+                return documents, errors
 
             cleaned_markdown = clean_mineru_markdown(
                 batch_result["markdown_text"]

@@ -95,12 +95,27 @@ def extract_question_reference(query):
             break
 
     question_number = None
+    option_letter = None
+
+    option_match = re.search(
+        r"(?:选|选择|答案是|为什么选)\s*([A-D])",
+        query,
+        re.I,
+    )
+
+    if option_match:
+        option_letter = option_match.group(1).upper()
 
     patterns = [
-        r"第\s*([0-9]+)\s*题",
-        r"第\s*([一二两三四五六七八九十]+)\s*题",
+        r"第\s*[\(（]?([0-9]+)[\)）]?\s*(?:题|小题|问)",
+        r"第\s*[\(（]?([一二两三四五六七八九十]+)[\)）]?\s*(?:题|小题|问)",
         r"(选择题|判断题|填空题|计算题|简答题)\s*第?\s*([0-9]+)\s*题?",
         r"(选择题|判断题|填空题|计算题|简答题)\s*第?\s*([一二两三四五六七八九十]+)\s*题?",
+        r"(选择题|判断题|填空题|计算题|简答题)\s*([0-9]+)\s*题?",
+        r"(选择题|判断题|填空题|计算题|简答题)\s*([一二两三四五六七八九十]+)\s*题?",
+        r"[\(（]([0-9]+)[\)）]",
+        r"[\(（]([一二两三四五六七八九十]+)[\)）]",
+        r"([①②③④⑤⑥⑦⑧⑨⑩])",
         r"([0-9]+)\s*[\.．、)]",
         r"([一二两三四五六七八九十]+)\s*[、\.．]",
     ]
@@ -122,7 +137,22 @@ def extract_question_reference(query):
             else:
                 num_text = groups[-1]
 
-        if num_text.isdigit():
+        circled_num_map = {
+            "①": 1,
+            "②": 2,
+            "③": 3,
+            "④": 4,
+            "⑤": 5,
+            "⑥": 6,
+            "⑦": 7,
+            "⑧": 8,
+            "⑨": 9,
+            "⑩": 10,
+        }
+
+        if num_text in circled_num_map:
+            question_number = circled_num_map[num_text]
+        elif num_text.isdigit():
             question_number = int(num_text)
         else:
             question_number = chinese_num_to_int(num_text)
@@ -133,6 +163,7 @@ def extract_question_reference(query):
     return {
         "question_type": question_type,
         "question_number": question_number,
+        "option_letter": option_letter,
     }
 
 
@@ -196,6 +227,10 @@ def build_question_number_patterns(question_number):
     return [
         f"第{question_number}题",
         f"第 {question_number} 题",
+        f"第{question_number}小题",
+        f"第 {question_number} 小题",
+        f"第{question_number}问",
+        f"第 {question_number} 问",
         f"{question_number}.",
         f"{question_number}．",
         f"{question_number}、",
@@ -204,6 +239,10 @@ def build_question_number_patterns(question_number):
         f"（{question_number}）",
         f"题{question_number}",
         f"第{cn_num}题",
+        f"第{cn_num}小题",
+        f"第{cn_num}问",
+        f"({cn_num})",
+        f"（{cn_num}）",
         f"{cn_num}、",
         f"{cn_num}.",
         f"{cn_num}．",
@@ -277,9 +316,11 @@ def calculate_rule_score(doc, query, question_ref):
 
     question_type = question_ref.get("question_type")
     question_number = question_ref.get("question_number")
+    option_letter = question_ref.get("option_letter")
 
     score = 0.0
     reasons = []
+    matched_keywords = []
 
     # 题型命中
     if question_type and question_type in content:
@@ -301,27 +342,42 @@ def calculate_rule_score(doc, query, question_ref):
             score += 8.0
             reasons.append("题型和题号同时命中")
 
+    if option_letter:
+        option_patterns = [
+            f"选{option_letter}",
+            f"选 {option_letter}",
+            f"答案{option_letter}",
+            f"答案是{option_letter}",
+            f"{option_letter}.",
+            f"{option_letter}．",
+            f"{option_letter}、",
+        ]
+
+        for pattern in option_patterns:
+            if pattern in content:
+                score += 3.0
+                reasons.append(f"选项命中：{option_letter}")
+                break
+
     # 用户关键词命中
     keywords = extract_keywords(query)
 
-    keyword_hit_count = 0
-
     for keyword in keywords:
         if keyword in content:
-            keyword_hit_count += 1
+            matched_keywords.append(keyword)
 
     if keywords:
-        keyword_score = keyword_hit_count / len(keywords)
+        keyword_score = len(matched_keywords) / len(keywords)
         score += keyword_score * 5.0
 
-        if keyword_hit_count > 0:
-            reasons.append(f"关键词命中：{keyword_hit_count}/{len(keywords)}")
+        if matched_keywords:
+            reasons.append(f"关键词命中：{len(matched_keywords)}/{len(keywords)}")
 
-    # 如果 chunk 的 metadata 里有 location/source，也可以轻微加权
-    if metadata.get("location"):
+    # location 只能作为已有命中后的轻微排序信号，不能单独让 chunk 进入规则候选。
+    if score > 0 and metadata.get("location"):
         score += 0.1
 
-    return score, reasons
+    return score, reasons, matched_keywords
 
 
 def rule_retrieve(chunks, query, top_n=HYBRID_RULE_TOP_N):
@@ -333,7 +389,7 @@ def rule_retrieve(chunks, query, top_n=HYBRID_RULE_TOP_N):
     candidates = []
 
     for doc in chunks:
-        rule_score, reasons = calculate_rule_score(doc, query, question_ref)
+        rule_score, reasons, matched_keywords = calculate_rule_score(doc, query, question_ref)
 
         if rule_score > 0:
             cloned_doc = Document(
@@ -342,6 +398,7 @@ def rule_retrieve(chunks, query, top_n=HYBRID_RULE_TOP_N):
             )
             cloned_doc.metadata["_rule_score"] = round(rule_score, 4)
             cloned_doc.metadata["_rule_reasons"] = reasons
+            cloned_doc.metadata["_matched_keywords"] = matched_keywords
 
             candidates.append((cloned_doc, rule_score))
 
@@ -394,11 +451,47 @@ def get_doc_key(doc):
     )
 
 
+def build_retrieval_explanation(
+    doc,
+    question_ref,
+    vector_similarity,
+    rule_score,
+    normalized_rule_score,
+    hybrid_score,
+    vector_weight,
+    rule_weight,
+    retrieval_methods,
+):
+    metadata = doc.metadata or {}
+
+    return {
+        "question_ref": question_ref,
+        "method": "+".join(retrieval_methods),
+        "matched_keywords": metadata.get("_matched_keywords", []),
+        "vector": {
+            "distance": metadata.get("_vector_distance", ""),
+            "similarity": round(vector_similarity, 4),
+        },
+        "rule": {
+            "score": round(rule_score, 4),
+            "normalized_score": round(normalized_rule_score, 4),
+            "reasons": metadata.get("_rule_reasons", []),
+        },
+        "hybrid": {
+            "score": round(hybrid_score, 4),
+            "weights": {
+                "vector": vector_weight,
+                "rule": rule_weight,
+            },
+        },
+    }
+
+
 # =========================
 # 混合检索
 # =========================
 
-def hybrid_retrieve(vector_db, chunks, query, top_k):
+def hybrid_retrieve(vector_db, chunks, query, top_k, original_query=None):
     """
     混合检索入口。
 
@@ -410,9 +503,14 @@ def hybrid_retrieve(vector_db, chunks, query, top_k):
 
     hybrid_score 越高，表示综合排序越靠前。
     """
+    rule_query = query
+
+    if original_query and original_query != query:
+        rule_query = f"{original_query}\n{query}"
+
     rule_candidates, question_ref = rule_retrieve(
         chunks=chunks,
-        query=query,
+        query=rule_query,
         top_n=HYBRID_RULE_TOP_N,
     )
 
@@ -477,6 +575,7 @@ def hybrid_retrieve(vector_db, chunks, query, top_k):
         # 保留规则原因
         merged[key]["doc"].metadata["_rule_score"] = doc.metadata.get("_rule_score", 0)
         merged[key]["doc"].metadata["_rule_reasons"] = doc.metadata.get("_rule_reasons", [])
+        merged[key]["doc"].metadata["_matched_keywords"] = doc.metadata.get("_matched_keywords", [])
 
     # 规则分数归一化，避免数值过大
     max_rule_score = max(
@@ -512,6 +611,17 @@ def hybrid_retrieve(vector_db, chunks, query, top_k):
         doc.metadata["_hybrid_score"] = round(hybrid_score, 4)
         doc.metadata["_normalized_rule_score"] = round(normalized_rule_score, 4)
         doc.metadata["_question_ref"] = question_ref
+        doc.metadata["_retrieval_explanation"] = build_retrieval_explanation(
+            doc=doc,
+            question_ref=question_ref,
+            vector_similarity=vector_similarity,
+            rule_score=rule_score,
+            normalized_rule_score=normalized_rule_score,
+            hybrid_score=hybrid_score,
+            vector_weight=vector_weight,
+            rule_weight=rule_weight,
+            retrieval_methods=retrieval_methods,
+        )
 
         final_results.append((doc, hybrid_score))
 

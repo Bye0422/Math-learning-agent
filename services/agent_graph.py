@@ -289,6 +289,7 @@ def rag_retrieval_node(state: AgentState) -> Dict[str, Any]:
             chunks=chunks,
             query=retrieval_question,
             top_k=candidate_top_n,
+            original_query=question,
         )
 
         if ENABLE_RERANK and candidate_docs_with_scores:
