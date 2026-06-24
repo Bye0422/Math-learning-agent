@@ -8,30 +8,19 @@ and editors.
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -U pip
-.\.venv\Scripts\python.exe -m pip install -r requirements-core.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-For MinerU PDF parsing and HTML card screenshots:
+For HTML card screenshots:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-mineru.txt
 .\.venv\Scripts\playwright.exe install chromium
 ```
 
-For local tests:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-```
-
-`requirements.txt` is the historical full environment freeze. Prefer the split
-files above on a new machine:
-
-- `requirements-core.txt`: Streamlit app, Qwen API, LangGraph, Chroma, pypdf,
-  docx export, image rendering, SQLite-backed product features.
-- `requirements-mineru.txt`: optional heavy PDF parsing and Playwright browser
-  runtime.
-- `requirements-dev.txt`: test-only dependencies.
+`requirements.txt` is the single curated dependency list for the Streamlit app,
+Qwen API, LangGraph, Chroma, document parsing, PDF export, MinerU, and the
+Playwright Python package. The Chromium browser binary is installed separately
+with the Playwright command above.
 
 ## 2. Configure secrets
 
@@ -75,9 +64,8 @@ To also test MathJax CDN network access:
 
 ## 5. Docker deployment
 
-The Docker image is intentionally built from `requirements-core.txt`. MinerU
-and Playwright are optional runtime additions and are not installed in the base
-image.
+The Docker image is built from `requirements.txt`. Playwright browser binaries
+may still need to be installed in a deployment-specific image layer.
 
 Build the image:
 
@@ -107,10 +95,9 @@ PowerShell line-continuation backticks.
 
 ### Optional MinerU in containers
 
-MinerU is optional for this project. The base image keeps deployment small and
-falls back to `pypdf` when MinerU is not available. If a deployment requires
-MinerU-enhanced PDF parsing, build a separate image layer that installs
-`requirements-mineru.txt`, installs any MinerU system/runtime requirements, and
+MinerU is included in `requirements.txt`, but the app still falls back to
+`pypdf` when MinerU is not available. If a deployment requires MinerU-enhanced
+PDF parsing, make sure the image has any MinerU system/runtime requirements and
 sets `MINERU_CMD` to the command path inside the container.
 
 Do not mount or copy a local `.venv` into the container.

@@ -31,6 +31,5 @@ class TaskValidatorTest(unittest.TestCase):
         self.assertEqual(result["task_type"], "calculation")
         self.assertFalse(result["need_rag"])
 
-
 if __name__ == "__main__":
     unittest.main()

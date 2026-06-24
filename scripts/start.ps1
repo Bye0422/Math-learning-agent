@@ -9,7 +9,7 @@ if (-not (Test-Path $Python)) {
 }
 
 if (-not (Test-Path $Streamlit)) {
-    throw "Streamlit not found. Install dependencies: .\.venv\Scripts\python.exe -m pip install -r requirements-core.txt"
+    throw "Streamlit not found. Install dependencies: .\.venv\Scripts\python.exe -m pip install -r requirements.txt"
 }
 
 Push-Location $ProjectRoot

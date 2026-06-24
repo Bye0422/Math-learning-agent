@@ -11,8 +11,8 @@ WORKDIR /app
 
 RUN python -m pip install --upgrade pip
 
-COPY requirements-core.txt ./
-RUN pip install -r requirements-core.txt
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
 
 COPY . .
 

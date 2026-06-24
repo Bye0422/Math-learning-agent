@@ -18,19 +18,12 @@ def safe_text(value):
 
 
 def normalize_tags_from_text(tags_text):
-    """
-    将用户输入的标签字符串转为列表。
-    支持：
-    导数, 乘积求导
-    导数，乘积求导
-    导数 / 乘积求导
-    """
     if isinstance(tags_text, list):
         tags = [str(tag).strip() for tag in tags_text if str(tag).strip()]
     else:
         tags = [
             tag.strip()
-            for tag in re.split(r"[，,、;/；\s]+", str(tags_text))
+            for tag in re.split(r"[,，、/;\s]+", str(tags_text))
             if tag.strip()
         ]
 
