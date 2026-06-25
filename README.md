@@ -1,545 +1,488 @@
-# Math-learning-agent 数学学习助手
+# Math-learning-agent
 
-一个面向数学学习场景的对话式 RAG Agent。系统以 AI 对话为主要工作区，以资料解析、Chunk 质量检查、来源追溯和错题复习为辅助能力，支持从 PDF、Word、TXT 和图片中读取题目，完成检索、讲解、错题卡生成和复习管理。
+Math-learning-agent 是一个面向数学学习场景的 Streamlit Agent。它可以直接聊天，也可以在用户上传资料后进行资料问答、数学题解析、Chunk 校正、错题卡生成、错题库管理和 PDF 导出。
 
-> 当前 README 同时承担三种职责：新用户启动指南、系统原理说明、开发者维护手册。文档中的命令和模块说明以当前仓库代码为准。
+项目的核心目标是把“普通陪伴式 Agent”和“基于学习资料的数学解析 Agent”放在同一个体验里：平常可以聊天、问天气、缓解情绪；当用户接入资料后，再进入严肃的资料检索、题目解析和错题整理流程。
 
-## 1. 项目定位
+## 功能概览
 
-普通聊天模型可以解释一道已经完整输入的题目，但面对整份试卷或讲义时，通常还需要解决以下问题：
+- 直接对话：支持日常聊天、学习建议、情绪陪伴、简单计算等不依赖资料的问题。
+- 资料上传：支持 PDF、DOCX、TXT、PNG、JPG、JPEG、WEBP。
+- PDF 解析：优先使用 MinerU 解析数学 PDF，失败后回退到 pypdf。
+- 图片 OCR：使用视觉模型识别题目图片。
+- 题目检索：结合向量检索、题号规则、章节规则和 LLM Rerank。
+- 数学解析：基于资料片段生成只包含解析答案的结果。
+- 错题卡：用户点击后才生成错题卡，不在每次回答后自动生成。
+- 错题库：支持错题持久化、筛选、复习状态、指定错题导出 PDF。
+- Chunk 校正：允许用户查看、修改、保存资料切片修正，提高后续检索质量。
+- 本地记忆：SQLite 保存会话历史和错题数据，运行数据默认不提交 Git。
 
-- 如何从复杂 PDF 中可靠提取正文、公式、题号和选项；
-- 如何保证一个 Chunk 尽量对应一道完整题，而不是在题干中间断开；
-- 如何让“第 3 题”准确命中第 3 题，而不是只做模糊语义匹配；
-- 如何展示答案依据，让用户能够检查模型引用了什么内容；
-- 如何把一次问答沉淀为可编辑、可复习、可导出的错题记录；
-- 如何用测试、环境检查和评测数据判断一次修改是否引入回归。
+## 技术栈
 
-本项目围绕上述链路构建，不只是调用一次大模型 API，而是提供从资料进入系统到学习结果沉淀的完整流程。
+| 层级 | 技术 |
+| --- | --- |
+| UI | Streamlit |
+| Agent 编排 | LangGraph |
+| LLM | OpenAI-compatible API，默认 DashScope/Qwen |
+| Embedding | Qwen Embedding |
+| 向量库 | Chroma |
+| 文档解析 | MinerU、pypdf、python-docx、Qwen OCR |
+| 卡片渲染 | HTML、MathJax、Playwright、Pillow |
+| 数据库 | SQLite |
+| 测试 | unittest、自定义 harness |
 
-## 2. 核心能力
-
-| 能力 | 当前实现 | 原理 | 采用理由 |
-| --- | --- | --- | --- |
-| 多格式输入 | PDF、DOCX、TXT、PNG、JPG、JPEG、WebP | 不同解析器统一输出 LangChain `Document` | 后续清洗、切分和检索只处理一种数据结构，降低模块耦合 |
-| 数学 PDF 解析 | MinerU 优先，pypdf 回退 | MinerU 提取复杂版面和公式；失败时逐页提取文本 | 数学资料版式复杂，但系统不能因增强解析器失败而完全不可用 |
-| 图片 OCR | Qwen 视觉模型 | 图片编码为 data URL 后发送给 OCR 模型 | 支持拍照题目和扫描题，不要求用户先手工转写 |
-| 试卷文本清洗 | 保守规则清洗 | 删除来源 URL、修复题号/选项换行、压缩异常空白，同时避开 LaTeX | 改善题目边界，又不擅自改写公式或补造缺失内容 |
-| 题目优先切分 | 题号识别 + 递归字符切分回退 | 先按题号形成题块，过长或无法识别时再按字符切分 | 单题完整性对数学问答通常比固定长度更重要 |
-| Chunk 质检与校正 | 质量标签、调试面板、人工修正持久化 | 检查结构异常并允许保存修正文案 | 自动解析不可能覆盖所有版式，人工闭环可处理长尾错误 |
-| 向量检索 | Qwen Embedding + Chroma | 文本向量化后做相似度召回 | 解决自然语言表达不同但语义相近的问题 |
-| 混合检索 | 向量分数 + 题号/题型/关键词规则分数 | 有明确题号时提高规则权重，否则提高向量权重 | 数学资料既需要语义召回，也需要精确定位 |
-| LLM Rerank | 候选 Chunk 二次相关性评分 | 先广召回，再由模型选择最终上下文 | 减少相似题、重复页眉和邻题进入最终答案 |
-| Agent 编排 | LangGraph | Router 将任务分发到工具、直接回答或 RAG 路径 | 让控制流显式、可测试、可扩展，而不是堆叠在 UI 条件分支中 |
-| 输出校验 | 结构校验与修复 | 检查数学解析字段，失败时执行格式修复 | 下游错题卡和导出依赖稳定结构，不能只相信模型自由输出 |
-| 会话记忆 | SQLite | 按 session 保存问题、答案和运行元数据 | 页面刷新后仍可追溯历史，同时避免只依赖临时 session state |
-| 错题系统 | SQLite + PNG/HTML/PDF | 保存题干、解析、难度、标签、来源和复习状态 | 将一次回答转化为长期学习资产 |
-| 工程验证 | 单元测试 + 环境检查 + Streamlit smoke + Eval V2 | 从静态语法、确定性行为、运行环境到在线效果分层验证 | 不同问题需要不同成本的验证，不能每次都依赖人工点页面 |
-
-## 3. 用户工作流
-
-### 3.1 最短使用路径
-
-1. 启动应用并打开 Streamlit 页面。
-2. 上传一份或多份数学资料。
-3. 等待系统完成读取、清洗、Chunk 和向量库构建。
-4. 在“AI 对话主工作区”提问，例如“选择题第 2 题为什么选 B”。
-5. 展开检索片段，核对题目来源和命中依据。
-6. 对需要巩固的题目生成错题卡，编辑确认后加入错题库。
-7. 在侧栏更新复习状态或导出错题 PDF。
-
-### 3.2 为什么把对话作为主区域
-
-用户的目标通常是“理解题目”，不是“管理解析管线”。因此页面把对话放在主要操作位置，把资料解析、Chunk 调试和错题管理作为辅助面板。这样既保留开发调试所需的透明度，又减少普通用户第一次使用时面对大量工程信息的负担。
-
-### 3.3 推荐提问方式
-
-- 精确题号：`讲解选择题第 3 题，并说明每个选项为什么对或错。`
-- 指定来源：`根据上传资料解释中心极限定理。`
-- 追问：`上一步为什么可以使用这个公式？`
-- 总结：`总结这份资料中关于假设检验的知识点。`
-- 工具任务：`计算 (12 + 8) * 3。`
-- 错题沉淀：`把刚才这道题整理成错题卡。`
-
-明确题号能够触发规则检索，具体任务要求能够帮助 Router 选择合适路径。追问会结合有限历史消息改写为可独立检索的问题，降低“它”“上一步”等指代造成的歧义。
-
-## 4. 系统架构
+## 总体流程
 
 ```mermaid
 flowchart TD
-    U["用户上传资料"] --> L["文档解析"]
-    L --> C["清洗与题目优先切分"]
-    C --> Q["Chunk 质检与人工校正"]
-    Q --> V["Embedding 与 Chroma"]
-    A["用户提问"] --> R["LangGraph Router"]
-    R -->|工具任务| T["Tool Registry"]
-    R -->|无需资料| D["直接回答"]
-    R -->|需要资料| H["Hybrid Retrieval"]
-    V --> H
-    H --> K["LLM Rerank"]
-    K --> G["数学答案生成与校验"]
-    G --> M["会话记忆与日志"]
-    G --> W["错题卡与复习库"]
+    A["用户打开 Streamlit 页面"] --> B{"是否上传资料？"}
+    B -- "否" --> C["直接聊天 / 情绪陪伴 / 简单计算"]
+    C --> D["Router 判断为 direct"]
+    D --> E["LLM 直接回答"]
+
+    B -- "是" --> F["上传 PDF / DOCX / TXT / 图片"]
+    F --> G["文档解析"]
+    G --> H["清洗文本并按题目优先切 Chunk"]
+    H --> I["创建或复用 Chroma 向量库"]
+    I --> J["用户提问"]
+    J --> K["Router 判断任务类型"]
+    K --> L{"是否需要资料？"}
+    L -- "否" --> E
+    L -- "是" --> M["改写检索问题"]
+    M --> N["混合检索：向量 + 题号/章节规则"]
+    N --> O["LLM Rerank"]
+    O --> P["数学解析 Prompt 生成答案"]
+    P --> Q["页面展示解析答案"]
+    Q --> R{"用户是否生成错题卡？"}
+    R -- "否" --> J
+    R -- "是" --> S["生成 HTML/图片错题卡"]
+    S --> T["修改题目、解析、难度、标签"]
+    T --> U["导入错题库"]
+    U --> V["筛选复习 / 导出 PDF"]
 ```
 
-### 4.1 分层原则
+## Agent 工作流原理
 
-- `app.py` 负责 Streamlit 页面组装和交互，不应承载大量可复用业务算法。
-- `ui/` 负责主题和可视化组件。
-- `state/` 负责 Streamlit session state 的初始化和重置。
-- `services/` 负责解析、切分、检索、Agent、记忆、错题和导出等业务能力。
-- `validators/` 负责模型输出和任务结构校验。
-- `prompts/` 集中管理不同任务的提示词。
-- `tests/` 提供离线、确定性的回归测试。
-- `evals/` 评估包含模型和检索在内的端到端效果。
+LangGraph 的工作流入口在 `services/agent_graph.py`。每次用户提问都会进入同一个图：
 
-采用这种边界的原因是：UI 会频繁变化，而检索、数据库和解析算法需要独立测试。将两者分开后，修改页面样式不会迫使开发者同时重测所有业务细节。
-
-## 5. 文档解析原理
-
-### 5.1 文件路由
-
-`services/document_loader.py` 根据扩展名选择解析器：
-
-- PDF：先尝试 MinerU，失败后回退 pypdf；
-- DOCX：分别读取正文段落和表格；
-- TXT：先尝试 UTF-8，失败后尝试 GBK；
-- 图片：调用 Qwen 视觉模型 OCR；
-- 多文件：逐个解析后合并为统一的 `Document` 列表。
-
-每个 `Document` 都附带 `source`、`file_type`、`location` 等元数据。这些字段会继续进入 Chunk、检索解释和错题来源，因此不能在中间步骤随意删除。
-
-### 5.2 MinerU 为什么优先但不是唯一方案
-
-数学 PDF 常包含双栏、表格、上下标和公式。pypdf 更接近“按 PDF 内部文本对象读取”，速度快但可能产生顺序错乱；MinerU 更强调版面分析，通常更适合复杂资料，但安装重、耗时更长，也可能因模型、路径或资源问题失败。
-
-因此当前策略是：
-
-1. 开启 `USE_MINERU_FOR_PDF` 时先运行 MinerU；
-2. 大文件按页分批，默认每 5 页一批，降低单次失败影响；
-3. 对 Markdown 去除页码和重复短页眉/页脚；
-4. 通过文件 hash 缓存解析结果，避免重复消耗；
-5. MinerU 没有产生可用文档时自动回退 pypdf。
-
-这个设计追求“增强能力失败时仍可用”，而不是让 MinerU 成为单点故障。
-
-### 5.3 PDF 质量评分
-
-质量检测会观察文本长度、乱码比例、空行比例、内容密度、题号数量、选项数量、数学符号和重复短行等指标，并生成质量等级和问题说明。
-
-质量分数不是数学正确率，也不能证明公式全部识别正确。它的用途是快速识别明显失败的解析结果，并提醒用户进入 Chunk 调试面板检查。
-
-## 6. Chunk 清洗与切分
-
-### 6.1 当前切分顺序
-
-```text
-原始 Document
--> 试卷文本规范化
--> 尝试识别题号边界
--> 按完整题目形成题块
--> 对过长题块或未识别文本执行递归字符切分
--> 添加 chunk_id 和质量元数据
--> 应用已保存的人工修正
+```mermaid
+flowchart LR
+    A["run_agent_graph"] --> B["router_node"]
+    B --> C{"route"}
+    C -- "direct" --> D["direct_answer_node"]
+    C -- "tool" --> E["tool_node"]
+    C -- "rag" --> F["rag_retrieval_node"]
+    F --> G{"检索是否成功"}
+    G -- "失败" --> H["结束并返回提示"]
+    G -- "成功" --> I["rag_answer_node"]
+    D --> J["END"]
+    E --> J
+    H --> J
+    I --> J
 ```
 
-### 6.2 数据清洗做什么
+### 1. Router
 
-`services/exam_text_cleaner.py` 当前执行保守清洗：
+`services/rag_service.py` 调用 `prompts/router_prompts.py`，把用户问题分类为：
 
-- 统一换行符；
-- 删除独立来源 URL；
-- 把粘连在正文中的题号移动到新行；
-- 把粘连的 `A.` 到 `D.` 选项移动到新行；
-- 规范选择括号和多余空格；
-- 合并异常空行；
-- 对 `$...$` LaTeX 片段跳过上述文本变换。
+- `chit_chat`：普通聊天。
+- `calculation`：简单计算，走直接 LLM 回答。
+- `qa`：普通资料问答。
+- `summary`：资料总结。
+- `extract_points`：提取知识点。
+- `question_solving`：题目解析。
+- `format_answer`：整理格式。
+- `log_query`：运行日志查询。
 
-跳过 LaTeX 的原因是普通正则清洗容易破坏公式空格、转义符和命令结构。这里宁可少修，也不应“修复”出错误公式。
+Router 同时判断 `need_rag`。如果不需要资料，就直接回答；如果需要资料，就进入 RAG。
 
-### 6.3 题目优先切分
+### 2. RAG 检索
 
-`services/question_chunker.py` 可识别以下常见题号：
+RAG 检索由 `services/retrieval_service.py` 和 `services/rerank_service.py` 组成：
 
-- `第 1 题`、`第（一）题`；
-- `1.`、`1．`、`1、`；
-- `一、`、`一.`；
-- `①` 到 `⑩`。
+```mermaid
+flowchart TD
+    A["用户原始问题"] --> B["保留原始题号和章节引用"]
+    A --> C["LLM 改写检索问题"]
+    B --> D["规则检索"]
+    C --> E["向量检索"]
+    D --> F["合并候选 Chunk"]
+    E --> F
+    F --> G["按 hybrid score 排序"]
+    G --> H["LLM Rerank"]
+    H --> I["最终上下文"]
+```
 
-同一文档至少识别到 `QUESTION_CHUNK_MIN_MARKERS` 个题号时，系统才启用题目切分，默认值为 2。这样可以避免正文里偶然出现一个编号时被错误切开。
+规则检索会识别：
 
-题块长度不超过 `QUESTION_CHUNK_MAX_CHARS`，默认 2500 字符时，会整体保留。原因是题干、条件、选项和小问共同构成语义，强行切断会直接降低检索和讲题质量。
+- `第 2 题`
+- `第二题`
+- `选择题第 3 题`
+- `3.1 的第二题`
+- `课后习题 1.1 中第二题`
+- `第 3.1 节第 2 题`
 
-### 6.4 递归字符切分回退
+这样可以避免用户问“3.1 的第二题”时被错误解析成“第 3 题”。
 
-无法可靠识别题目边界或题块过长时，系统使用 `RecursiveCharacterTextSplitter`：
+### 3. 数学解析
 
-| 参数 | 默认值 | 理由 |
-| --- | --- | --- |
-| `CHUNK_SIZE` | 800 | 在上下文完整性、Embedding 表达和调用成本之间折中 |
-| `CHUNK_OVERLAP` | 120 | 保留边界两侧上下文，减少定义或条件被截断 |
-| `CHUNK_SEPARATORS` | 段落、换行、句号、逗号、空格、字符 | 优先在自然语义边界切分，最后才按字符硬切 |
+数学解析由 `services/math_exam_service.py` 负责。它会：
 
-这些是字符数，不是模型 token 数。调整参数后需要重新建立向量库，并使用真实试卷验证题目完整率和检索命中率。
+1. 把检索到的 Chunk 整理为上下文。
+2. 推断题型。
+3. 读取 `prompts/KAFANG_MODEL_PROMPT.md` 生成解析答案。
+4. 读取 `prompts/KAFANG_VALIDATION_PROMPT.md` 做边界检查/修复。
+5. 返回页面展示用的解析文本和错题卡候选 item。
 
-### 6.5 Chunk 调试与人工校正
+当前设计中，用户提问后只展示解析答案；错题卡由用户点击后再生成。
 
-系统为每个 Chunk 添加编号、来源、位置、题号标记和质量检查结果。调试面板可筛选、查看并修正问题 Chunk；人工修正会持久化，并在后续切分结果上重新应用。
+## 文档解析和向量库原理
 
-人工校正存在的理由是 OCR 和复杂版面解析有不可避免的长尾错误。纯自动规则越激进，越容易误改公式；保守自动化加可追溯人工修正更适合学习资料。
+```mermaid
+flowchart TD
+    A["上传文件"] --> B{"文件类型"}
+    B -- "PDF" --> C["MinerU 解析"]
+    C --> D{"是否成功？"}
+    D -- "是" --> H["Document 列表"]
+    D -- "否" --> E["pypdf 回退"]
+    B -- "DOCX" --> F["python-docx 读取段落和表格"]
+    B -- "TXT" --> G["UTF-8/GBK 文本读取"]
+    B -- "图片" --> I["Qwen OCR"]
+    E --> H
+    F --> H
+    G --> H
+    I --> H
+    H --> J["清洗题目文本"]
+    J --> K["按题号优先切 Chunk"]
+    K --> L["应用用户 Chunk 修正"]
+    L --> M["Embedding"]
+    M --> N["Chroma 向量库"]
+    N --> O["缓存到 cache/vector_store"]
+```
 
-## 7. RAG 与 Agent 工作流
+核心原则：
 
-### 7.1 Router
+- 数学题资料优先保持单题完整，不轻易按固定长度切碎。
+- PDF 优先 MinerU，因为公式、版式和扫描件对 pypdf 不友好。
+- Chunk 修正会在创建向量库时应用，避免用户反复改同一个识别错误。
+- 向量库可以按 Chunk hash 缓存，重复上传相同资料时复用结果。
 
-每次提问先由 Router 判断任务类型、是否需要资料以及输出形式：
+## 错题卡和错题库流程
 
-- 工具任务进入 `tool_node`；
-- 闲聊或无需文档的问题进入 `direct_answer_node`；
-- 资料问答进入 `rag_retrieval_node`，然后进入答案节点。
+```mermaid
+flowchart TD
+    A["解析答案"] --> B{"用户点击生成错题卡？"}
+    B -- "否" --> C["仅保留聊天答案"]
+    B -- "是" --> D["构造错题 item"]
+    D --> E["HTML + MathJax 渲染"]
+    E --> F["Playwright 截图生成图片"]
+    F --> G["用户修改题目/解析/难度/标签"]
+    G --> H["保存到 SQLite 错题库"]
+    H --> I["筛选错题"]
+    I --> J["选择错题"]
+    J --> K["导出 PDF"]
+```
 
-Router 失败时会回退为普通 RAG 问答，理由是分类错误不应直接中断用户请求。
+错题库本地保存在 `data/wrongbook.db`。卡片图片、HTML 和 PDF 导出文件分别写入：
 
-### 7.2 混合检索
+- `data/cards/`
+- `data/card_html/`
+- `data/wrongbook_exports/`
 
-向量检索擅长语义相似，但对“第 2 题”这种短而精确的引用并不稳定。规则检索会解析题型、阿拉伯数字、中文数字、圈号和选项字母，再结合 Chunk 内容与元数据打分。
+这些目录都被 `.gitignore` 排除，避免把用户数据提交到 GitHub。
 
-当前权重：
+## 快速开始
 
-- 问题包含明确题号时：向量 0.35，规则 0.65；
-- 普通语义问题：向量 0.75，规则 0.25。
-
-最终结果保留检索方式、向量距离、规则命中原因和综合分数，供页面解释和问题排查。
-
-### 7.3 Rerank
-
-系统默认先召回最多 12 个候选，再由 LLM 评分并保留任务所需数量。普通问答默认 3 个，摘要和知识点提取默认 5 个。
-
-先召回后重排的理由是：只取前三个向量结果可能漏掉真正题目，而把大量 Chunk 全部发送给答案模型又会增加噪声和成本。Rerank 在召回率和上下文精度之间增加了一层选择。
-
-### 7.4 输出校验
-
-数学模式要求结果包含解析、难度、题型和标签等结构。验证器会规范难度、题型、标签和解析文本，并检查选择题、填空题等关键格式。必要时触发修复流程。
-
-这里校验的是结构和可消费性，不等同于证明数学答案绝对正确。高风险场景仍应由用户检查推导和来源。
-
-## 8. 错题与复习系统
-
-错题库使用 SQLite 保存：
-
-- 原始题干与解析；
-- 难度、题型和标签；
-- 来源文件、位置和 Chunk ID；
-- 卡片图片与 HTML 路径；
-- 错误原因；
-- 复习状态、下次复习时间、最近复习时间和复习次数。
-
-数据库新增字段采用幂等迁移：启动时检查现有列，只补充缺失字段，不删除或重建用户数据。原因是错题属于长期资产，升级功能不能以清空数据库为代价。
-
-错题卡支持传统图片渲染以及 MathJax HTML 渲染。MathJax 更适合公式排版，但依赖浏览器和脚本资源；传统图片渲染作为更简单的基础路径。批量错题可以导出 PDF。
-
-## 9. 本地安装
-
-### 9.1 环境要求
-
-- Windows PowerShell；
-- Python 3.11 或 3.12。当前本地虚拟环境为 Python 3.12，Docker 基础镜像为 Python 3.11；
-- 可访问 Qwen/DashScope OpenAI Compatible API；
-- 可选：MinerU，用于增强 PDF 解析；
-- 可选：Playwright Chromium，用于 HTML 错题卡截图。
-
-### 9.2 创建虚拟环境
+### 1. 创建虚拟环境
 
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 ```
 
-使用项目内虚拟环境能够隔离依赖，避免系统 Python 中其他项目的包版本影响本项目。
-
-### 9.3 安装依赖
-
-核心应用：
+### 2. 安装依赖
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-core.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-MinerU 和 HTML 卡片截图能力：
+如果要使用错题卡 HTML 截图功能，安装 Playwright Chromium：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-mineru.txt
 .\.venv\Scripts\playwright.exe install chromium
 ```
 
-开发与测试：
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-```
-
-`requirements.txt` 是历史完整环境冻结，包含大量传递依赖。新环境优先使用拆分后的依赖文件，因为安装更快、用途更清楚，也更容易定位失败来源。
-
-### 9.4 配置环境变量
+### 3. 配置环境变量
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-然后编辑本地 `.env`，至少替换：
+至少配置：
 
-```dotenv
-QWEN_API_KEY=你的实际密钥
+```env
+QWEN_API_KEY=replace-with-your-api-key
 QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 QWEN_CHAT_MODEL=qwen3.7-plus
-QWEN_OCR_MODEL=支持视觉输入的模型名
+QWEN_OCR_MODEL=qwen-vl-ocr
 QWEN_EMBEDDING_MODEL=text-embedding-v4
 ```
 
-`.env` 已被 Git 忽略，不应提交。`.env.example` 只保存占位值和公开默认配置。密钥一旦出现在聊天记录、提交历史或工单中，应立即轮换，而不是只删除当前文件。
+`.env` 不会提交到 GitHub。
 
-### 9.5 启动前检查
-
-```powershell
-.\.venv\Scripts\python.exe scripts\check_env.py
-```
-
-它会检查密钥是否为占位值、核心包能否导入、MinerU 命令、Playwright 浏览器、SQLite 路径、运行目录和 MathJax URL。检查不会输出真实 API Key。
-
-需要额外验证 MathJax CDN 网络访问时：
-
-```powershell
-.\.venv\Scripts\python.exe scripts\check_env.py --online
-```
-
-### 9.6 启动应用
-
-推荐入口：
-
-```powershell
-.\scripts\start.ps1
-```
-
-该脚本先执行环境检查，再启动 Streamlit，适合日常使用。
-
-也可以直接启动：
+### 4. 启动
 
 ```powershell
 .\.venv\Scripts\streamlit.exe run app.py
 ```
 
-默认访问地址为 `http://localhost:8501`。
+或：
 
-## 10. 环境变量说明
+```powershell
+.\scripts\start.ps1
+```
 
-| 变量 | 默认值/示例 | 作用与理由 |
+默认地址：
+
+```text
+http://localhost:8501
+```
+
+## 配置说明
+
+主要配置集中在 `.env.example` 和 `config.py`。
+
+| 变量 | 作用 |
+| --- | --- |
+| `QWEN_API_KEY` | DashScope/OpenAI-compatible API Key |
+| `QWEN_BASE_URL` | OpenAI-compatible endpoint |
+| `QWEN_CHAT_MODEL` | 路由、聊天、解析、RAG 生成模型 |
+| `QWEN_OCR_MODEL` | 图片 OCR 模型 |
+| `QWEN_EMBEDDING_MODEL` | Embedding 模型 |
+| `USE_MINERU_FOR_PDF` | 是否优先使用 MinerU |
+| `MINERU_CMD` | MinerU 可执行文件路径 |
+| `ENABLE_VECTOR_CACHE` | 是否缓存 Chroma 向量库 |
+| `ENABLE_SQLITE_MEMORY` | 是否启用本地聊天记忆 |
+| `ENABLE_WRONGBOOK` | 是否启用错题库 |
+| `MATHJAX_CDN_URL` | HTML 卡片 MathJax 地址 |
+
+## 文件功能索引
+
+### 根目录
+
+| 文件 | 功能 | 原理/说明 |
 | --- | --- | --- |
-| `QWEN_API_KEY` | 必填 | API 身份凭证，只能放在本地或部署密钥管理器 |
-| `QWEN_BASE_URL` | DashScope compatible URL | 统一使用 OpenAI Compatible 客户端 |
-| `QWEN_CHAT_MODEL` | `qwen3.7-plus` | Router、回答、修复和 Rerank 使用的聊天模型 |
-| `QWEN_OCR_MODEL` | 视觉模型 | 图片 OCR 必须支持图像输入 |
-| `QWEN_EMBEDDING_MODEL` | `text-embedding-v4` | Chunk 向量化模型；更换后应重建向量缓存 |
-| `USE_MINERU_FOR_PDF` | `true` | 控制是否优先尝试增强 PDF 解析 |
-| `MINERU_CMD` | `.venv/Scripts/mineru.exe` | 允许不同机器覆盖可执行文件路径 |
-| `MINERU_METHOD` | `auto` | 让 MinerU根据 PDF 类型选择处理方式 |
-| `MINERU_PAGE_BATCH_SIZE` | `5` | 降低大 PDF 单批内存和失败范围 |
-| `MINERU_ENABLE_CACHE` | `true` | 避免同一 PDF 重复解析 |
-| `ENABLE_QUESTION_CHUNKING` | `true` | 优先保证单题完整性 |
-| `QUESTION_CHUNK_MIN_MARKERS` | `2` | 防止偶然编号触发错误切分 |
-| `QUESTION_CHUNK_MAX_CHARS` | `2500` | 限制超长题块，避免上下文过大 |
-| `ENABLE_VECTOR_CACHE` | `true` | 复用相同 Chunk 集合的 Chroma 索引 |
-| `ENABLE_SQLITE_MEMORY` | `true` | 持久化会话历史 |
-| `MEMORY_DB_PATH` | `data/memory.db` | 会话数据库位置 |
-| `ENABLE_WRONGBOOK` | `true` | 开启错题持久化功能 |
-| `WRONGBOOK_DB_PATH` | `data/wrongbook.db` | 错题数据库位置 |
-| `CARD_OUTPUT_DIR` | `data/cards` | PNG 卡片输出目录 |
-| `CARD_HTML_OUTPUT_DIR` | `data/card_html` | HTML 卡片输出目录 |
-| `WRONGBOOK_PDF_OUTPUT_DIR` | `data/wrongbook_exports` | 错题 PDF 输出目录 |
-| `MATHJAX_CDN_URL` | jsDelivr MathJax | 公式卡片渲染脚本，可替换为内网地址 |
+| `app.py` | Streamlit 主入口 | 组装页面、左侧导航、资料上传、聊天、错题卡、错题库、导出和日志写入。 |
+| `config.py` | 全局配置 | 从 `.env` 读取模型、路径、Chunk、MinerU、Rerank、错题库等参数。 |
+| `.env.example` | 环境变量模板 | 给新用户复制为 `.env`，避免提交真实密钥。 |
+| `.gitignore` | Git 忽略规则 | 排除密钥、虚拟环境、数据库、缓存、日志、用户资料。 |
+| `.dockerignore` | Docker 忽略规则 | 构建镜像时排除本地运行产物。 |
+| `Dockerfile` | Docker 镜像定义 | 安装依赖并启动 Streamlit。 |
+| `DEPLOYMENT.md` | 部署说明 | 记录本地、Docker、验证和清理流程。 |
+| `README.md` | 项目说明 | 当前文件。 |
+| `requirements.txt` | Python 依赖 | 精简后的项目依赖清单。 |
 
-相对路径会基于项目根目录解析，因此从不同终端目录启动也不会把数据写到意外位置。
+### `prompts/`
 
-## 11. 验证与测试
+| 文件 | 功能 | 原理/说明 |
+| --- | --- | --- |
+| `prompts/router_prompts.py` | 任务路由 Prompt | 让 LLM 判断任务类型、是否需要 RAG、回答格式。 |
+| `prompts/direct_prompts.py` | 直接回答 Prompt | 用于普通聊天、情绪陪伴、天气类说明、简单计算等非 RAG 问题。 |
+| `prompts/retrieval_prompts.py` | 检索改写 Prompt | 把用户问题改写成适合向量检索的查询，同时保留原问题给规则检索。 |
+| `prompts/answer_prompts.py` | 通用 RAG 回答 Prompt | 非数学专用模式下，根据资料片段生成答案。 |
+| `prompts/rerank_prompts.py` | Rerank Prompt | 让 LLM 判断候选 Chunk 与问题的相关性。 |
+| `prompts/ocr_prompts.py` | 图片 OCR Prompt | 指导视觉模型识别题目图片中的文字、公式和选项。 |
+| `prompts/math_exam_prompts.py` | 数学解析 Prompt 组装 | 读取 KAFANG Prompt 文件，并注入问题、资料片段、来源和历史上下文。 |
+| `prompts/KAFANG_MODEL_PROMPT.md` | 数学解析主 Prompt | 规定解析输出口径、学习产品风格和 LaTeX 表达。 |
+| `prompts/KAFANG_VALIDATION_PROMPT.md` | 数学解析边界检查 Prompt | 对解析结果做修复和边界约束。 |
+| `prompts/validation_prompts.py` | 通用回答修复 Prompt | 通用 RAG 输出不合格时用于修复。 |
 
-### 11.1 快速 Harness
+### `services/`
+
+| 文件 | 功能 | 原理/说明 |
+| --- | --- | --- |
+| `services/agent_state.py` | LangGraph 状态定义 | 用 TypedDict 描述工作流中传递的字段。 |
+| `services/agent_graph.py` | Agent 工作流 | Router 后分流到 direct/tool/RAG，并串联检索、Rerank、生成。 |
+| `services/rag_service.py` | RAG 公共服务 | 调用 LLM 完成任务分类、检索改写、直接回答、通用 RAG 回答和输出校验。 |
+| `services/retrieval_service.py` | 混合检索 | 题号/章节规则检索 + Chroma 向量检索 + 分数融合。 |
+| `services/rerank_service.py` | LLM 重排 | 对候选 Chunk 重新打分，挑选最终上下文。 |
+| `services/vector_service.py` | 切分和向量库 | 清洗文本、题目优先 Chunk、应用修正、创建 Chroma、缓存向量库。 |
+| `services/document_loader.py` | 文件读取入口 | 按文件类型路由到 PDF、DOCX、TXT、图片 OCR。 |
+| `services/mineru_loader.py` | MinerU PDF 解析 | 调用 MinerU，支持缓存、分批、质量检查和回退。 |
+| `services/mineru_cache.py` | MinerU 缓存 | 用文件内容和配置生成 cache key，避免重复解析。 |
+| `services/mineru_cleaner.py` | MinerU Markdown 清洗 | 清理 MinerU 输出中的噪声，提升后续 Chunk 质量。 |
+| `services/pdf_quality_service.py` | PDF 解析质量评估 | 检查乱码率、空行、文本长度等指标，辅助判断解析质量。 |
+| `services/exam_text_cleaner.py` | 题目文本清洗 | 修复粘连选项、题号、URL 噪声等。 |
+| `services/question_chunker.py` | 题目优先切分 | 识别题号 marker，尽量保持单题完整。 |
+| `services/question_parser_service.py` | 题目结构解析 | 从 Chunk 中抽取题干、选项等结构化信息。 |
+| `services/math_exam_service.py` | 数学解析服务 | 构造资料上下文，调用数学 Prompt，生成解析答案和错题 item。 |
+| `services/card_render_service.py` | 图片错题卡渲染 | 生成基础卡片图片，推断题目文本和来源信息。 |
+| `services/card_html_render_service.py` | HTML 错题卡渲染 | 用 HTML + MathJax 渲染公式，再用 Playwright 截图。 |
+| `services/card_edit_service.py` | 错题卡编辑 | 根据用户修改重建错题 item。 |
+| `services/wrongbook_service.py` | 错题库 | SQLite 表结构、错题保存、筛选、复习状态、PDF 导出。 |
+| `services/memory_service.py` | 会话记忆 | SQLite 保存会话、读取历史、清空当前会话。 |
+| `services/log_service.py` | 运行日志 | 记录每次问答的任务类型、检索来源、耗时和错误。 |
+| `services/export_service.py` | 对话导出 | 把聊天记录导出为 TXT/DOCX。 |
+| `services/chunk_debug_service.py` | Chunk 调试数据 | 构造 Chunk 表格、过滤、预览内容。 |
+| `services/chunk_quality_service.py` | Chunk 质量检查 | 检查多题混入、选项粘连等问题。 |
+| `services/correction_store_service.py` | Chunk 修正存储 | 保存用户对 Chunk 的修正，并在切分后应用。 |
+| `services/llm_service.py` | LLM 客户端 | 创建聊天、OCR、Embedding 模型客户端并检查环境变量。 |
+
+### `services/tools/`
+
+| 文件 | 功能 | 原理/说明 |
+| --- | --- | --- |
+| `services/tools/__init__.py` | 工具包入口 | 保持 tools 包可导入。 |
+| `services/tools/tool_registry.py` | 工具注册表 | 当前保留 `log_query`，计算类问题改为直接 LLM 回答，避免本地计算工具和 LLM 口径冲突。 |
+
+### `ui/`
+
+| 文件 | 功能 | 原理/说明 |
+| --- | --- | --- |
+| `ui/theme.py` | 页面主题 | 注入 Streamlit CSS，控制导航、卡片、抽屉、输入区、错题库等视觉。 |
+| `ui/result_views.py` | 结果视图 | 渲染错题卡等结果块。 |
+| `ui/chunk_debug_panel.py` | Chunk 校正面板 | 展示 Chunk 列表、质量提示、用户修正入口。 |
+| `ui/__init__.py` | UI 包入口 | 保持 ui 包可导入。 |
+
+### `state/`
+
+| 文件 | 功能 | 原理/说明 |
+| --- | --- | --- |
+| `state/session_state.py` | Streamlit 状态初始化 | 定义上传资料、聊天、错题卡、抽屉、过滤器等 session state 默认值和重置函数。 |
+| `state/__init__.py` | state 包入口 | 保持 state 包可导入。 |
+
+### `validators/`
+
+| 文件 | 功能 | 原理/说明 |
+| --- | --- | --- |
+| `validators/task_validator.py` | Router 输出校验 | 规范 task_type、need_rag 等字段，防止模型返回异常结构。 |
+| `validators/answer_validator.py` | 通用答案校验 | 检查 RAG 答案格式和必需字段。 |
+| `validators/math_exam_output_validator.py` | 数学输出校验 | 校验数学解析 JSON/条目结构。 |
+
+### `scripts/`
+
+| 文件 | 功能 | 原理/说明 |
+| --- | --- | --- |
+| `scripts/start.ps1` | Windows 启动脚本 | 检查 Streamlit 并启动应用。 |
+| `scripts/check_env.py` | 环境检查 | 检查模型配置、依赖、MinerU、Playwright、SQLite 写入路径。 |
+| `scripts/run_harness.py` | 验证入口 | 串联语法检查、单元测试、环境检查、Streamlit smoke test、Eval。 |
+| `scripts/clean_runtime.py` | 运行目录清理 | 清理缓存、日志、MinerU 临时目录。 |
+| `scripts/__init__.py` | scripts 包入口 | 让测试可以导入脚本函数。 |
+
+### `evals/`
+
+| 文件 | 功能 | 原理/说明 |
+| --- | --- | --- |
+| `evals/eval_cases_v2.json` | 评估用例 | 定义路由、RAG、日志、题目解析等评估问题和期望字段。 |
+| `evals/run_eval_v2.py` | Eval 执行器 | 加载 `evals/source_docs/` 文档，运行 Agent，统计命中和输出质量。 |
+| `evals/build_eval_report.py` | Eval 报告 | 生成 HTML/JSON 趋势报告。 |
+| `evals/source_docs/.gitkeep` | 占位文件 | 保留目录；真实评估资料不提交。 |
+
+### `tests/`
+
+| 文件 | 覆盖范围 |
+| --- | --- |
+| `tests/test_chunk_debug_service.py` | Chunk 调试表格、过滤、预览。 |
+| `tests/test_chunk_quality_service.py` | Chunk 质量检查。 |
+| `tests/test_clean_runtime.py` | 运行目录清理脚本。 |
+| `tests/test_correction_store_service.py` | Chunk 修正保存和应用。 |
+| `tests/test_eval_report.py` | Eval 报告生成。 |
+| `tests/test_eval_v2.py` | Eval 统计、趋势、跳过逻辑。 |
+| `tests/test_exam_text_cleaner.py` | 题目文本清洗。 |
+| `tests/test_llm_calculation_routing.py` | 计算任务走直接 LLM，不走工具。 |
+| `tests/test_math_exam_output_validator.py` | 数学解析输出校验。 |
+| `tests/test_memory_service.py` | 会话记忆写入和读取。 |
+| `tests/test_mineru_cache.py` | MinerU cache key。 |
+| `tests/test_question_chunker.py` | 题目优先切分。 |
+| `tests/test_question_parser_service.py` | 题目结构解析。 |
+| `tests/test_retrieval_hybrid.py` | 混合检索排序和原始问题保留。 |
+| `tests/test_retrieval_service.py` | 题号、章节号、规则检索。 |
+| `tests/test_task_validator.py` | 任务分类校验。 |
+| `tests/test_vector_service.py` | Chroma metadata 规范化。 |
+| `tests/test_wrongbook_service.py` | 错题库筛选、复习、PDF 导出。 |
+
+## 数据目录
+
+这些目录运行时自动生成，不提交 GitHub：
+
+| 目录 | 内容 |
+| --- | --- |
+| `data/` | SQLite 数据库、错题卡、错题 PDF 导出。 |
+| `cache/` | Chroma 向量库、MinerU Markdown 缓存。 |
+| `logs/` | Agent CSV 运行日志。 |
+| `mineru_runtime/` | MinerU 临时输入输出。 |
+| `.codex/` | Codex 本地截图和临时资料。 |
+| `.agents/` | Codex/Agent 本地状态。 |
+
+## 验证
+
+普通修改：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_harness.py --mode quick
 ```
 
-依次执行：
-
-1. 所有 Python 文件语法编译；
-2. `tests/` 下的离线单元测试；
-3. 环境和运行路径检查。
-
-适用于普通服务层修改。它不启动页面，也不会主动运行 Eval V2。
-
-### 11.2 完整 Harness
+完整启动验证：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_harness.py --mode full --port 8501
 ```
 
-在 quick 基础上启动 Streamlit，并确认服务器进入监听状态后关闭。UI、部署、入口脚本或发布前修改应运行 full，因为语法通过并不代表应用可以正常启动。
-
-端口被占用时改用其他端口：
-
-```powershell
-.\.venv\Scripts\python.exe scripts\run_harness.py --mode full --port 8502
-```
-
-### 11.3 Eval V2
+运行 Eval V2：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_harness.py --mode full --eval
 ```
 
-Eval V2 会评估路由、任务识别、RAG 命中、答案关键词、字段完整性、Rerank、耗时和记忆写入，并生成结果和趋势报告。它可能调用真实 API、产生费用且耗时更长，因此只在检索、Prompt、模型或 Agent 行为变化后运行。
+Eval 可能调用真实 API。需要 RAG 评估资料时，把文档放入 `evals/source_docs/`。
 
-### 11.4 验证层级的理由
-
-| 层级 | 能发现的问题 | 不能替代什么 |
-| --- | --- | --- |
-| 语法编译 | 拼写、缩进、导入阶段语法错误 | 业务正确性 |
-| 单元测试 | 确定性服务逻辑回归 | 外部 API 和真实页面 |
-| 环境检查 | 缺包、路径、浏览器、数据库写权限 | 用户工作流 |
-| Streamlit smoke | 应用能否启动 | 页面每个交互是否正确 |
-| Eval V2 | RAG 与模型效果趋势 | 人工数学正确性审查 |
-| 人工验收 | 真实资料、视觉和完整工作流 | 自动回归效率 |
-
-## 12. 目录结构
-
-```text
-rag_agent_project/
-├─ app.py                         # Streamlit 页面与交互组装
-├─ config.py                      # 配置、参数和环境变量解析
-├─ prompts/                       # Router、检索、回答、OCR、校验 Prompt
-├─ services/                      # 解析、Chunk、检索、Agent、记忆、错题、导出
-│  └─ tools/                      # 计算器、日志查询和工具注册表
-├─ state/                         # Streamlit session state
-├─ ui/                            # 主题、结果视图、Chunk 调试面板
-├─ validators/                    # 任务和模型输出校验
-├─ tests/                         # 离线单元测试
-├─ evals/                         # Eval 数据、执行器和报告生成
-├─ scripts/                       # 启动、环境检查、Harness、运行目录清理
-├─ skills/                        # 项目维护 Skill 与工程约束
-├─ tasks/                         # 历史改进任务拆分与设计记录
-├─ data/                          # SQLite、卡片和导出，运行时生成且不提交
-├─ cache/                         # MinerU 与向量缓存，运行时生成且不提交
-├─ logs/                          # Agent CSV 日志，运行时生成且不提交
-├─ Dockerfile
-├─ DEPLOYMENT.md
-└─ .env.example
-```
-
-## 13. 数据、缓存与清理
-
-- `data/` 是用户资产，应备份；包含会话数据库、错题数据库、卡片和导出。
-- `cache/` 可以重建，但保留可减少重复解析和向量化时间。
-- `logs/` 用于调试和评估，可能随使用增长。
-- `mineru_runtime/` 是 MinerU 临时工作区，不应作为长期数据来源。
-
-先预览清理范围：
+## Docker
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\clean_runtime.py
+docker build -t math-learning-agent .
+docker run --rm -p 8501:8501 --env-file .env math-learning-agent
 ```
 
-确认后执行：
+如果容器里需要 HTML 错题卡截图，需要额外安装 Playwright Chromium 浏览器二进制。
+
+## 常见问题
+
+### 图片无法 OCR
+
+检查 `QWEN_OCR_MODEL` 是否为支持视觉输入的模型，并确认 API Key 有模型权限。
+
+### PDF 解析效果差
+
+优先检查 MinerU：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\clean_runtime.py --apply
+.\.venv\Scripts\python.exe scripts\check_env.py
 ```
 
-清理脚本只针对运行时输出，不删除 `.env`、源码、测试或错题数据库。先预览再应用是为了降低误删不可恢复数据的风险。
+MinerU 不可用时会回退到 pypdf，但公式、扫描版和复杂版式效果会下降。
 
-## 14. Docker 部署
+### 问“第几题”找不到内容
+
+确认资料已上传并建立向量库。系统支持题号和章节号引用，但资料解析后的 Chunk 中也需要保留对应题号或章节信息。
+
+### 错题 PDF 导出失败
+
+PDF 导出依赖已经生成的错题卡图片。请先生成错题卡并导入错题库，再选择导出。
+
+## 提交前检查
 
 ```powershell
-docker build -t math-learning-agent:core .
-docker run --rm -p 8501:8501 --env-file .env `
-  -v ${PWD}/data:/app/data `
-  -v ${PWD}/cache:/app/cache `
-  -v ${PWD}/logs:/app/logs `
-  -v ${PWD}/mineru_runtime:/app/mineru_runtime `
-  math-learning-agent:core
+git status --short
+git ls-files --others --exclude-standard
 ```
 
-基础镜像只安装 `requirements-core.txt`，不默认安装 MinerU 和 Playwright。这样可控制镜像大小和部署复杂度；需要增强 PDF 或 HTML 截图时，应建立单独镜像层，而不是把本机 `.venv` 复制进容器。
+不要提交：
 
-挂载 `data/` 的理由是容器本身可能被删除或替换，用户错题和会话不能跟随容器生命周期丢失。更完整的部署说明见 `DEPLOYMENT.md`。
-
-## 15. 常见问题
-
-### 15.1 页面直接显示 `<div class="...">`
-
-原因通常是 HTML 字符串被 Markdown 当作代码块，或渲染时没有启用 HTML。主题组件应使用无前导缩进的 HTML，并通过 `st.markdown(..., unsafe_allow_html=True)` 输出。修改后重启或刷新 Streamlit。
-
-### 15.2 某一道题没有形成独立 Chunk
-
-依次检查：
-
-1. PDF 解析结果里题号是否存在；
-2. 题号是否属于当前支持的格式；
-3. 同一 Document 是否至少识别到两个题号；
-4. 题目是否超过 `QUESTION_CHUNK_MAX_CHARS`；
-5. 题号是否被页眉、公式或 OCR 错误粘连；
-6. Chunk 调试面板是否已有人工校正。
-
-不要直接无限增大 `CHUNK_SIZE`。这可能暂时包住一道题，却会让多个题目混入同一向量，降低题号检索精度。优先修复题号清洗和边界识别。
-
-### 15.3 MinerU 失败但质量分数仍然较高
-
-系统可能已经回退到 pypdf；质量分数只衡量文本可读特征，不代表使用了 MinerU，也不证明公式完全正确。应查看 `file_type`、解析警告和实际 Chunk 内容。
-
-### 15.4 修改配置后没有生效
-
-- 确认修改的是项目根目录 `.env`；
-- 重启 Streamlit，因为部分配置在模块导入时读取；
-- 修改 Embedding 模型或切分参数后重新建立向量库；
-- 缓存结构变化时提高 `MINERU_CACHE_SCHEMA_VERSION` 或清理对应缓存。
-
-### 15.5 HTML 错题卡无法截图
-
-执行：
-
-```powershell
-.\.venv\Scripts\playwright.exe install chromium
-.\.venv\Scripts\python.exe scripts\check_env.py --online
-```
-
-前者安装浏览器运行时，后者检查 MathJax 网络资源。离线环境应把 `MATHJAX_CDN_URL` 指向可访问的内部资源。
-
-## 16. 开发约束
-
-1. 修改前先阅读实际代码，不根据旧文档推断当前实现。
-2. 不读取、打印或提交真实 `.env` 密钥。
-3. UI 逻辑留在 `app.py`/`ui/`，可测试业务逻辑优先放入 `services/`。
-4. 检索行为修改必须补充 `test_retrieval_service.py` 或 `test_retrieval_hybrid.py`。
-5. SQLite 错题表只能做幂等迁移，不得删除重建真实数据库。
-6. 保留既有元数据字段，除非同时完成迁移、UI 和测试更新。
-7. 普通改动至少运行 quick harness；UI、部署和发布改动运行 full harness。
-8. 只有在接受 API 时间和费用时运行 `--eval`。
-
-这些约束的目的不是增加流程，而是保护三类高风险资产：用户数据、检索可解释性和可重复验证能力。
-
-## 17. 当前限制
-
-- 题号识别仍以规则为主，特殊排版、跨页题目和复杂多级小问可能需要人工校正；
-- LLM Rerank 会增加调用时间和费用，且评分仍可能波动；
-- MathJax HTML 卡片默认依赖 CDN，完全离线部署需要自托管脚本；
-- Streamlit 页面组装仍集中在较大的 `app.py` 中，后续适合继续拆分控制器；
-- 自动校验可以检查格式和部分规则，不能替代教师对数学推导正确性的审核；
-- 多用户生产部署还需要身份认证、权限隔离、并发治理和数据库备份策略。
-
-## 18. 维护入口
-
-- 项目详细部署：`DEPLOYMENT.md`
-- 改进任务记录：`tasks/`
-- 项目维护 Skill：`skills/math-learning-agent-maintainer/SKILL.md`
-- 模块地图：`skills/math-learning-agent-maintainer/references/project-map.md`
-- 快速验证：`scripts/run_harness.py`
-- 环境诊断：`scripts/check_env.py`
-
-发生问题时，先判断它属于解析、Chunk、检索、生成、持久化还是 UI，再进入对应模块。按数据流定位比直接在 `app.py` 中试错更快，也更不容易引入跨模块回归。
+- `.env`
+- `.venv/`
+- `data/`
+- `cache/`
+- `logs/`
+- `mineru_runtime/`
+- 用户上传的资料
+- 生成的错题卡和 PDF

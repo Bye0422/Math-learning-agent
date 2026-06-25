@@ -116,7 +116,7 @@ def check_mineru():
 
     warn(
         "MinerU command not found. PDF parsing can fall back to pypdf, "
-        "or install with requirements-mineru.txt and set MINERU_CMD."
+        "or install dependencies from requirements.txt and set MINERU_CMD."
     )
     return 0
 

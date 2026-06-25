@@ -5,129 +5,75 @@ from services.chunk_debug_service import (
     filter_chunk_debug_rows,
 )
 from services.correction_store_service import save_chunk_correction
-from services.question_parser_service import parse_question_from_chunk
-from ui.theme import render_section_note, render_status_grid
+from ui.theme import render_section_note
 
 
 def render_chunk_debug_panel(chunks):
-    with st.expander("Chunk 调试面板"):
-        chunk_debug_rows = build_chunk_debug_rows(chunks)
+    chunk_debug_rows = build_chunk_debug_rows(chunks)
 
+    if not chunk_debug_rows:
+        st.info("上传资料后，这里会显示可校正的文本片段。")
+        return
+
+    col1, col2 = st.columns([1.1, 0.9])
+
+    with col1:
         chunk_keyword = st.text_input(
-            "搜索 chunk 内容、来源或位置",
+            "搜索片段内容",
             key="chunk_debug_keyword",
+            placeholder="输入题干关键词、页码或文件名",
         )
+
+    with col2:
         chunk_marker = st.text_input(
-            "按题号过滤，例如：第1题、1.、(2)",
+            "按题号定位",
             key="chunk_debug_marker",
-        )
-        chunk_quality_filter = st.selectbox(
-            "按质量过滤",
-            options=["全部", "high_risk", "warning", "ok"],
-            format_func=lambda value: {
-                "全部": "全部",
-                "high_risk": "高风险",
-                "warning": "可疑",
-                "ok": "正常",
-            }.get(value, value),
-            key="chunk_debug_quality_filter",
-        )
-        filtered_chunk_rows = filter_chunk_debug_rows(
-            chunk_debug_rows,
-            keyword=chunk_keyword,
-            question_marker=chunk_marker,
+            placeholder="例如：第 3 题、3、3)",
         )
 
-        if chunk_quality_filter != "全部":
-            filtered_chunk_rows = [
-                row
-                for row in filtered_chunk_rows
-                if row.get("quality_level") == chunk_quality_filter
-            ]
+    filtered_chunk_rows = filter_chunk_debug_rows(
+        chunk_debug_rows,
+        keyword=chunk_keyword,
+        question_marker=chunk_marker,
+    )
 
-        high_risk_count = sum(
-            1 for row in chunk_debug_rows if row.get("quality_level") == "high_risk"
+    selected_chunk = select_chunk(chunks, filtered_chunk_rows)
+
+    if selected_chunk is None:
+        st.caption(f"已找到 {len(filtered_chunk_rows)} 个片段。选择一个片段后可直接修改文本。")
+        return
+
+    metadata = selected_chunk.metadata or {}
+    st.markdown("**原始片段**")
+    render_section_note("检查题干、选项、公式和页脚是否被正确读取。")
+    st.write(selected_chunk.page_content)
+
+    st.markdown("**修改后的片段**")
+    corrected_text = st.text_area(
+        "修改 chunk 文本",
+        value=selected_chunk.page_content,
+        height=220,
+        label_visibility="collapsed",
+        key=f"chunk_correction_text_{metadata.get('chunk_id', '')}",
+    )
+
+    if st.button(
+        "保存 chunk 修改",
+        key=f"save_chunk_correction_{metadata.get('chunk_id', '')}",
+    ):
+        save_chunk_correction(
+            source=metadata.get("source", ""),
+            chunk_id=metadata.get("chunk_id", ""),
+            corrected_text=corrected_text,
         )
-        warning_count = sum(
-            1 for row in chunk_debug_rows if row.get("quality_level") == "warning"
-        )
-
-        if high_risk_count or warning_count:
-            st.warning(
-                f"发现 {high_risk_count} 个高风险 chunk，"
-                f"{warning_count} 个可疑 chunk。建议优先检查题干、选项和页脚。"
-            )
-
-        render_status_grid(
-            [
-                {
-                    "label": "匹配 Chunk",
-                    "value": len(filtered_chunk_rows),
-                    "note": "当前筛选结果",
-                },
-                {
-                    "label": "高风险",
-                    "value": high_risk_count,
-                    "note": "建议优先校正",
-                },
-                {
-                    "label": "可疑",
-                    "value": warning_count,
-                    "note": "建议抽查",
-                },
-                {
-                    "label": "总 Chunk",
-                    "value": len(chunk_debug_rows),
-                    "note": "当前文件会话",
-                },
-            ]
-        )
-
-        st.dataframe(
-            filtered_chunk_rows[:100],
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        selected_chunk = select_chunk(chunks, filtered_chunk_rows)
-
-        if selected_chunk is None:
-            return
-
-        st.subheader("Chunk 原文")
-        render_section_note("用于核对题干、选项、公式和页脚是否被正确录入。")
-        st.write(selected_chunk.page_content)
-
-        st.subheader("结构化题目预览")
-        render_section_note("系统会尝试从 chunk 中抽取题号、题干、选项、答案和解析。")
-        st.json(parse_question_from_chunk(selected_chunk))
-
-        st.subheader("人工校正")
-        render_section_note("保存后会记录到本地校正库；重新建立向量库后，校正文案会进入检索。")
-        corrected_text = st.text_area(
-            "修正后的 chunk 文本",
-            value=selected_chunk.page_content,
-            height=220,
-            key=f"chunk_correction_text_{selected_chunk.metadata.get('chunk_id', '')}",
-        )
-
-        if st.button(
-            "保存 chunk 校正",
-            key=f"save_chunk_correction_{selected_chunk.metadata.get('chunk_id', '')}",
-        ):
-            save_chunk_correction(
-                source=selected_chunk.metadata.get("source", ""),
-                chunk_id=selected_chunk.metadata.get("chunk_id", ""),
-                corrected_text=corrected_text,
-            )
-            selected_chunk.page_content = corrected_text
-            selected_chunk.metadata["chunk_corrected"] = True
-            st.success("chunk 校正已保存。重新建立向量库后，校正文案会进入检索。")
+        selected_chunk.page_content = corrected_text
+        selected_chunk.metadata["chunk_corrected"] = True
+        st.success("已保存。重新上传或重建资料后，修改内容会进入后续问答。")
 
 
 def select_chunk(chunks, filtered_chunk_rows):
     chunk_options = [
-        f"Chunk {row.get('chunk_id')} | {row.get('question_marker') or '普通片段'} | {row.get('preview')[:40]}"
+        f"Chunk {row.get('chunk_id')} | {row.get('question_marker') or '普通片段'} | {row.get('preview')[:48]}"
         for row in filtered_chunk_rows[:100]
     ]
     chunk_option_to_id = {
@@ -136,9 +82,9 @@ def select_chunk(chunks, filtered_chunk_rows):
     }
 
     selected_chunk_option = st.selectbox(
-        "查看 chunk 原文",
+        "选择要修改的 chunk",
         options=[""] + chunk_options,
-        format_func=lambda value: "请选择 chunk" if value == "" else value,
+        format_func=lambda value: "请选择一个片段" if value == "" else value,
         key="chunk_debug_selected_option",
     )
 

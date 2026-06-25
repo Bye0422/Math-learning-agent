@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 .codex/
+.agents/
 __pycache__/
 *.pyc
 
@@ -15,3 +16,5 @@ mineru_runtime/
 evals/eval_results.csv
 evals/eval_summary.json
 evals/eval_outputs/
+evals/source_docs/*
+!evals/source_docs/.gitkeep

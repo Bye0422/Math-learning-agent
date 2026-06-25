@@ -59,7 +59,9 @@ def router_node(state: AgentState) -> Dict[str, Any]:
 
         task_type = task_info.get("task_type", "qa")
 
-        if is_tool_task(task_type):
+        if task_type == "calculation":
+            route = "direct"
+        elif is_tool_task(task_type):
             route = "tool"
         elif not task_info.get("need_rag", True):
             route = "direct"
@@ -78,7 +80,9 @@ def router_node(state: AgentState) -> Dict[str, Any]:
             task_info = classify_task(question, chat_history)
             task_type = task_info.get("task_type", "qa")
 
-            if is_tool_task(task_type):
+            if task_type == "calculation":
+                route = "direct"
+            elif is_tool_task(task_type):
                 route = "tool"
             elif not task_info.get("need_rag", True):
                 route = "direct"
@@ -123,6 +127,11 @@ def route_after_router(state: AgentState) -> Literal["tool_node", "direct_answer
     """
     route = state.get("route", "rag")
 
+    task_type = state.get("task_info", {}).get("task_type", "")
+    if task_type == "calculation":
+        return "direct_answer_node"
+
+
     if route == "tool":
         return "tool_node"
 
@@ -140,6 +149,11 @@ def tool_node(state: AgentState) -> Dict[str, Any]:
     question = state.get("question", "")
     task_info = state.get("task_info", {})
     task_type = task_info.get("task_type", "")
+
+    # 最终保险：即使旧注册表仍把 calculation 当作工具任务，
+    # 也直接转到大模型回答节点。
+    if task_type == "calculation":
+        return direct_answer_node(state)
 
     try:
         tool_result = run_tool_by_task_type(

@@ -26,6 +26,24 @@ class RetrievalServiceTest(unittest.TestCase):
         self.assertIsNone(result["question_type"])
         self.assertEqual(result["question_number"], 3)
 
+    def test_extract_question_reference_with_section_and_question_number(self):
+        cases = [
+            ("3.1的第二题怎么做", "3.1", 2),
+            ("课后习题1.1中，第二题怎么做", "1.1", 2),
+            ("第3.1节第2题怎么做", "3.1", 2),
+        ]
+
+        for query, expected_section, expected_number in cases:
+            with self.subTest(query=query):
+                result = extract_question_reference(query)
+                self.assertEqual(result["section_ref"], expected_section)
+                self.assertEqual(result["question_number"], expected_number)
+
+    def test_decimal_section_is_not_treated_as_question_number(self):
+        result = extract_question_reference("3.1怎么理解")
+        self.assertEqual(result["section_ref"], "3.1")
+        self.assertIsNone(result["question_number"])
+
     def test_build_question_number_patterns(self):
         patterns = build_question_number_patterns(2)
         self.assertIn("第2题", patterns)
@@ -65,6 +83,29 @@ class RetrievalServiceTest(unittest.TestCase):
 
         self.assertEqual(candidates, [])
         self.assertEqual(question_ref["question_number"], 2)
+
+    def test_section_and_question_number_outrank_question_number_only(self):
+        from langchain_core.documents import Document
+
+        exact_doc = Document(
+            page_content="习题 3.1\n2. 设随机变量服从正态分布，求概率。",
+            metadata={"source": "doc.pdf", "location": "习题 3.1", "chunk_id": "exact"},
+        )
+        other_doc = Document(
+            page_content="2. 完全无关的第二题内容。",
+            metadata={"source": "doc.pdf", "location": "习题 2.1", "chunk_id": "other"},
+        )
+
+        candidates, question_ref = rule_retrieve(
+            [other_doc, exact_doc],
+            "3.1的第二题怎么做",
+            top_n=2,
+        )
+
+        self.assertEqual(question_ref["section_ref"], "3.1")
+        self.assertEqual(question_ref["question_number"], 2)
+        self.assertEqual(candidates[0][0].metadata["chunk_id"], "exact")
+        self.assertGreater(candidates[0][1], candidates[1][1])
 
 
 if __name__ == "__main__":

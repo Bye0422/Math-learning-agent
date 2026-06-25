@@ -1,4 +1,5 @@
 import hashlib
+import json
 import uuid
 from pathlib import Path
 
@@ -105,10 +106,39 @@ def build_chunks_hash(chunks):
     return hasher.hexdigest()[:16]
 
 
+def normalize_metadata_for_chroma(metadata):
+    normalized = {}
+
+    for key, value in (metadata or {}).items():
+        if value is None:
+            normalized[key] = ""
+        elif isinstance(value, (str, int, float, bool)):
+            normalized[key] = value
+        elif isinstance(value, list):
+            normalized[key] = json.dumps(value, ensure_ascii=False) if value else ""
+        elif isinstance(value, dict):
+            normalized[key] = json.dumps(value, ensure_ascii=False)
+        else:
+            normalized[key] = str(value)
+
+    return normalized
+
+
+def normalize_chunks_for_chroma(chunks):
+    normalized_chunks = []
+
+    for chunk in chunks:
+        chunk.metadata = normalize_metadata_for_chroma(chunk.metadata)
+        normalized_chunks.append(chunk)
+
+    return normalized_chunks
+
+
 def create_vector_db(chunks):
     """
     创建 Chroma 向量库。
     """
+    chunks = normalize_chunks_for_chroma(chunks)
     embeddings = get_embeddings()
 
     if ENABLE_VECTOR_CACHE:

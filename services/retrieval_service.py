@@ -70,6 +70,37 @@ def chinese_num_to_int(text):
     return None
 
 
+def normalize_section_ref(text):
+    if not text:
+        return None
+
+    return text.strip().replace("．", ".")
+
+
+def extract_section_reference(query):
+    """
+    提取章节/习题组编号，例如：
+    - 3.1的第二题
+    - 课后习题1.1中，第二题
+    - 第3.1节第2题
+    """
+    if not query:
+        return None
+
+    section_patterns = [
+        r"(?:课后习题|习题|练习|章节|第)\s*([0-9]{1,3}(?:[\.．][0-9]{1,3}){1,3})\s*(?:节|章|中|的)?",
+        r"(?<![0-9])([0-9]{1,3}(?:[\.．][0-9]{1,3}){1,3})(?![0-9])",
+    ]
+
+    for pattern in section_patterns:
+        match = re.search(pattern, query)
+
+        if match:
+            return normalize_section_ref(match.group(1))
+
+    return None
+
+
 # =========================
 # 从用户问题中提取题型和题号
 # =========================
@@ -96,6 +127,7 @@ def extract_question_reference(query):
 
     question_number = None
     option_letter = None
+    section_ref = extract_section_reference(query)
 
     option_match = re.search(
         r"(?:选|选择|答案是|为什么选)\s*([A-D])",
@@ -116,7 +148,7 @@ def extract_question_reference(query):
         r"[\(（]([0-9]+)[\)）]",
         r"[\(（]([一二两三四五六七八九十]+)[\)）]",
         r"([①②③④⑤⑥⑦⑧⑨⑩])",
-        r"([0-9]+)\s*[\.．、)]",
+        r"(?<![0-9\.．])([0-9]+)\s*[\.．、)](?![0-9])",
         r"([一二两三四五六七八九十]+)\s*[、\.．]",
     ]
 
@@ -164,6 +196,7 @@ def extract_question_reference(query):
         "question_type": question_type,
         "question_number": question_number,
         "option_letter": option_letter,
+        "section_ref": section_ref,
     }
 
 
@@ -249,6 +282,37 @@ def build_question_number_patterns(question_number):
     ]
 
 
+def build_section_patterns(section_ref):
+    """
+    为章节/习题组编号生成常见写法。
+    """
+    section_ref = normalize_section_ref(section_ref)
+
+    if not section_ref:
+        return []
+
+    fullwidth_section_ref = section_ref.replace(".", "．")
+
+    return [
+        section_ref,
+        fullwidth_section_ref,
+        f"第{section_ref}节",
+        f"第 {section_ref} 节",
+        f"第{fullwidth_section_ref}节",
+        f"第 {fullwidth_section_ref} 节",
+        f"习题{section_ref}",
+        f"习题 {section_ref}",
+        f"习题{fullwidth_section_ref}",
+        f"课后习题{section_ref}",
+        f"课后习题 {section_ref}",
+        f"课后习题{fullwidth_section_ref}",
+        f"练习{section_ref}",
+        f"练习 {section_ref}",
+        f"章节{section_ref}",
+        f"章节 {section_ref}",
+    ]
+
+
 # =========================
 # 关键词提取
 # =========================
@@ -317,24 +381,44 @@ def calculate_rule_score(doc, query, question_ref):
     question_type = question_ref.get("question_type")
     question_number = question_ref.get("question_number")
     option_letter = question_ref.get("option_letter")
+    section_ref = question_ref.get("section_ref")
 
     score = 0.0
     reasons = []
     matched_keywords = []
+    metadata_text = " ".join(str(value) for value in metadata.values() if value)
+    searchable_text = f"{content}\n{metadata_text}"
 
     # 题型命中
     if question_type and question_type in content:
         score += 5.0
         reasons.append(f"题型命中：{question_type}")
 
+    # 章节/习题组命中。章节号常出现在页眉、标题或 chunk metadata 中，所以这里同时看 metadata。
+    section_patterns = build_section_patterns(section_ref)
+    section_hit = False
+
+    for pattern in section_patterns:
+        if pattern and pattern in searchable_text:
+            section_hit = True
+            score += 10.0
+            reasons.append(f"章节命中：{pattern}")
+            break
+
     # 题号命中
     number_patterns = build_question_number_patterns(question_number)
+    number_hit = False
 
     for pattern in number_patterns:
         if pattern in content:
+            number_hit = True
             score += 12.0
             reasons.append(f"题号命中：{pattern}")
             break
+
+    if section_ref and question_number is not None and section_hit and number_hit:
+        score += 18.0
+        reasons.append("章节和题号同时命中")
 
     # 题型 + 题号同时命中，加权
     if question_type and question_number is not None:
@@ -523,6 +607,7 @@ def hybrid_retrieve(vector_db, chunks, query, top_k, original_query=None):
     has_question_ref = (
         question_ref.get("question_type") is not None
         or question_ref.get("question_number") is not None
+        or question_ref.get("section_ref") is not None
     )
 
     if has_question_ref:
